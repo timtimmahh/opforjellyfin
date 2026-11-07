@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"opforjellyfin/internal/flags"
 	"opforjellyfin/internal/logger"
@@ -24,7 +25,7 @@ var (
 
 	onlySpecials bool
 	verboseList  bool
-	sortNewest	 bool
+	sortNewest   bool
 
 	alternate bool
 )
@@ -35,7 +36,7 @@ var listCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		spinner := ui.NewMultirowSpinner(ui.Animations["Searcher"], 4)
 
-		cfg := shared.LoadConfig()
+		cfg, _ := shared.LoadConfig()
 
 		if cfg.Source.BaseURL == "" {
 			spinner.Stop()
@@ -58,27 +59,11 @@ var listCmd = &cobra.Command{
 			}
 		}
 
-		if sortNewest {
-			// Sort by date descending, then seeders descending
-			sort.SliceStable(filtered, func(i, j int) bool {
-				if filtered[i].Date.Equal(filtered[j].Date) {
-					return filtered[i].Seeders > filtered[j].Seeders
-				}
-				return filtered[i].Date.After(filtered[j].Date)
-			})
-		} else {
-			// Sort by DownloadKey, then seeders descending
-			sort.SliceStable(filtered, func(i, j int) bool {
-				if filtered[i].DownloadKey == filtered[j].DownloadKey {
-					return filtered[i].Seeders > filtered[j].Seeders
-				}
-				return filtered[i].DownloadKey < filtered[j].DownloadKey
-			})
-		}
+		sortTorrents(filtered, sortNewest)
 
 		spinner.Stop()
 
-		fmt.Println("📚 Filtered Download List:\n")
+		fmt.Println("📚 Filtered Download List:")
 		for _, t := range filtered {
 			if verboseList {
 				renderVerboseRow(t)
@@ -87,6 +72,28 @@ var listCmd = &cobra.Command{
 			}
 		}
 	},
+}
+
+// sortTorrents orders by upload date (newest first, unknown dates last) when
+// newest is set, otherwise by download key. Seeders descending breaks ties.
+func sortTorrents(entries []shared.TorrentEntry, newest bool) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if newest && !a.Date.Equal(b.Date) {
+			return a.Date.After(b.Date)
+		}
+		if !newest && a.DownloadKey != b.DownloadKey {
+			return a.DownloadKey < b.DownloadKey
+		}
+		return a.Seeders > b.Seeders
+	})
+}
+
+func formatUploadDate(date time.Time) string {
+	if date.IsZero() {
+		return "N/A"
+	}
+	return date.Format("2006-01-02 15:04:05")
 }
 
 func applyFilters(t shared.TorrentEntry) bool {
@@ -149,13 +156,6 @@ func renderRow(t shared.TorrentEntry) {
 	// styling and render
 	truncatedTitle := ui.AnsiPadRight(t.TorrentName, 30)
 
-	var dateFmt string
-	if t.Date.IsZero() {
-		dateFmt = "N/A"
-	} else {
-		dateFmt = t.Date.Format("2006-01-02 15:04:05")
-	}
-
 	row := ui.RenderRow(
 		"%s - %s: %s Have? %s | Meta: %s | %-9s | %s | %s seeders | %s | %s",
 		alternate,
@@ -168,7 +168,7 @@ func renderRow(t shared.TorrentEntry) {
 		ui.AnsiPadLeft(ui.StyleByRange(t.Quality, 400, 1000), 5),
 		ui.AnsiPadLeft(ui.StyleByRange(t.Seeders, 0, 10), 3),
 		t.FileSize,
-		dateFmt,
+		formatUploadDate(t.Date),
 	)
 
 	// set flag
@@ -192,13 +192,6 @@ func renderVerboseRow(t shared.TorrentEntry) {
 
 	fullTitle := ui.AnsiPadRight(t.Title, 60)
 
-	var dateFmt string
-	if t.Date.IsZero() {
-		dateFmt = "N/A"
-	} else {
-		dateFmt = t.Date.Format("2006-01-02 15:04:05")
-	}
-
 	row := ui.RenderRow(
 		"%s - %s: %s H:%s M:%s | %s seeders | %s | %s",
 		alternate,
@@ -209,7 +202,7 @@ func renderVerboseRow(t shared.TorrentEntry) {
 		metaMark,
 		ui.AnsiPadLeft(ui.StyleByRange(t.Seeders, 0, 10), 3),
 		t.FileSize,
-		dateFmt,
+		formatUploadDate(t.Date),
 	)
 
 	alternate = !alternate
@@ -225,6 +218,6 @@ func init() {
 
 	listCmd.Flags().BoolVarP(&onlySpecials, "specials", "s", false, "Show only specials")
 	listCmd.Flags().BoolVarP(&verboseList, "verbose", "v", false, "Show full titles")
-	listCmd.Flags().BoolVarP(&sortNewest, "newest", "n", false, "Sort by newest upload date")
+	listCmd.Flags().BoolVarP(&sortNewest, "newest", "n", false, "Sort by torrent upload date, newest first")
 	rootCmd.AddCommand(listCmd)
 }

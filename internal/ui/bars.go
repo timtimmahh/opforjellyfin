@@ -6,78 +6,154 @@ import (
 	"opforjellyfin/internal/shared"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
-func FollowProgress(doneChan chan struct{}) {
-	first := true
+func FollowProgress(doneChan chan struct{}, started time.Time) {
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
+	logger.BufferUserOutput(true)
+	fmt.Print("\033[?25l")
+
+	previous, latest := "", ""
+	rows, slots, previousWidth := 0, 0, 0
+	var messages strings.Builder
+	draw := func(finishing bool) {
+		width := max(0, GetTerminalWidth()-1)
+		downloads := shared.GetActiveDownloads()
+		slots = max(slots, len(downloads))
+		if pending := logger.TakeUserOutput(); pending != "" {
+			messages.WriteString(pending)
+			for _, line := range strings.Split(pending, "\n") {
+				if strings.TrimSpace(line) != "" {
+					latest = singleLine(line)
+				}
+			}
+		}
+
+		frame := renderAllBars(downloads, width)
+		frame += strings.Repeat("\r\033[K\n", slots-len(downloads))
+		if placed, total := shared.GetDownloadProgress(); total > 0 {
+			frame += fmt.Sprintf("\r%s\033[K\n", renderTotalBar(placed, total, width))
+		}
+		status := "Status: Downloading"
+		if finishing {
+			status = "Status: Finished"
+		}
+		if latest != "" {
+			status = "Latest: " + latest
+		}
+		if !started.IsZero() {
+			status = fmt.Sprintf("Elapsed: %s | %s", time.Since(started).Truncate(time.Second), status)
+		}
+		frame += fmt.Sprintf("\r%s\033[K\n", ansi.Truncate(status, width, "…"))
+		if frame == previous {
+			return
+		}
+
+		// A narrower terminal can reflow the previous frame onto more rows.
+		if previousWidth != width && previous != "" {
+			rows = strings.Count(ansi.Hardwrap(previous, width+1, true), "\n")
+		}
+		var output strings.Builder
+		if rows > 0 {
+			fmt.Fprintf(&output, "\033[%dA", rows)
+		}
+		output.WriteString("\r")
+		output.WriteString(frame)
+		output.WriteString("\r\033[J")
+		fmt.Print(output.String())
+		previous, rows, previousWidth = frame, strings.Count(frame, "\n"), width
+	}
 
 	for {
 		select {
 		case <-ticker.C:
-			downloads := shared.GetActiveDownloads()
-			num := len(downloads)
-
-			// print initial lines
-			if first {
-				for i := 0; i < num+1; i++ {
-					fmt.Print("\n")
-				}
-				first = false
-			}
-
-			// +1 for the marker, +1 for the trailing \n in renderAllBars
-			ClearLines(num + 2)
-
-			// render current status
-			renderAllBars(downloads)
-
+			draw(false)
 		case <-doneChan:
-			downloads := shared.GetActiveDownloads()
-			num := len(downloads)
-			ClearLines(num + 2)
-			renderAllBars(downloads)
-			logger.Log(false, "ALLDONE! UI shutting down.")
-
-			// callback wedone
+			draw(true)
+			fmt.Print("\033[?25h", messages.String())
+			logger.BufferUserOutput(false)
 			doneChan <- struct{}{}
 			return
 		}
 	}
 }
 
-// render bars
-func renderSingleBar(title, msg string, progress, total int64, titlewidth, barwidth int) string {
-	if total == 0 {
-		return fmt.Sprintf("%s [%s] %s", AnsiPadRight(title, titlewidth), strings.Repeat("░", barwidth), AnsiPadLeft("0%", 4))
+func renderTotalBar(placed, total, width int) string {
+	titleWidth, barWidth, detailWidth := progressColumns(width)
+	title := fmt.Sprintf("Total: %d/%d episodes", placed, total)
+	percent := 0.0
+	if total > 0 {
+		percent = min(1.0, max(0.0, float64(placed)/float64(total)))
 	}
-	percent := float64(progress) / float64(total)
-	filled := int(percent * float64(barwidth))
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barwidth-filled)
-
-	maxW := GetTerminalWidth()
-
-	percentStr := fmt.Sprintf("%3.0f%%", percent*100)
-	if percent >= 1.0 {
-		percentStr = " ✅ "
+	line := fmt.Sprintf("%s %s %4.0f%%", AnsiPadRight(title, titleWidth, "…"), progressBar(int64(placed), int64(total), barWidth, Style.Green), percent*100)
+	if detailWidth > 0 {
+		line += " " + AnsiPadRight(fmt.Sprintf("%d remaining", max(0, total-placed)), detailWidth, "…")
 	}
-
-	outMsg := msg
-	if msg != "" {
-		outMsg = "| " + msg
-	}
-
-	output := fmt.Sprintf("%s [%s] %s %s", AnsiPadRight(title, titlewidth), bar, AnsiPadLeft(percentStr, 4), outMsg)
-	return AnsiPadRight(output, maxW)
+	return ansi.Truncate(line, width, "")
 }
 
-// renderall
-func renderAllBars(downloads []*shared.TorrentDownload) {
-	allbars := ""
-	for _, td := range downloads {
-		bar := renderSingleBar(td.Title, td.PlacementProgress, td.Progress, td.TotalSize, 15, 40)
-		allbars = allbars + bar + "\n"
+func renderDownload(td *shared.TorrentDownload, width int) string {
+	percent := 0.0
+	if td.TotalSize > 0 {
+		percent = min(1.0, max(0.0, float64(td.Progress)/float64(td.TotalSize)))
 	}
-	PrintMultiline(allbars)
+	detail := td.PlacementProgress
+	if detail == "" {
+		switch {
+		case td.TotalSize == 0:
+			detail = "Preparing"
+		case !td.Done && td.Progress >= td.TotalSize:
+			detail = "Verifying"
+		default:
+			detail = downloadSize(td.Progress) + " / " + downloadSize(td.TotalSize)
+		}
+	}
+	titleWidth, barWidth, detailWidth := progressColumns(width)
+	line := fmt.Sprintf("%s %s %4.0f%%", AnsiPadRight(singleLine(td.Title), titleWidth, "…"), progressBar(td.Progress, td.TotalSize, barWidth, Style.LBlue), percent*100)
+	if detailWidth > 0 {
+		line += " " + AnsiPadRight(singleLine(detail), detailWidth, "…")
+	}
+	return ansi.Truncate(line, width, "")
+}
+
+func progressColumns(width int) (titleWidth, barWidth, detailWidth int) {
+	barWidth = min(20, max(4, width/5))
+	if width >= 60 {
+		detailWidth = min(24, max(20, width/4))
+	}
+	titleWidth = max(0, width-barWidth-7)
+	if detailWidth > 0 {
+		titleWidth = max(0, titleWidth-detailWidth-1)
+	}
+	return
+}
+
+func progressBar(progress, total int64, width int, style ColorStyle) string {
+	filled := 0
+	if total > 0 {
+		filled = int(float64(width) * min(1.0, max(0.0, float64(progress)/float64(total))))
+	}
+	return StyleFactory(strings.Repeat("━", filled)+strings.Repeat("·", width-filled), style)
+}
+
+func downloadSize(bytes int64) string {
+	if bytes >= 1<<30 {
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/(1<<30))
+	}
+	return fmt.Sprintf("%.0f MiB", float64(max(0, bytes))/(1<<20))
+}
+
+func singleLine(text string) string {
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func renderAllBars(downloads []*shared.TorrentDownload, width int) string {
+	var frame strings.Builder
+	for _, td := range downloads {
+		fmt.Fprintf(&frame, "\r%s\033[K\n", renderDownload(td, width))
+	}
+	return frame.String()
 }

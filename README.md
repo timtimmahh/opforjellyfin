@@ -6,29 +6,33 @@ CLI-tool to automate download and organisation of [One Pace](https://onepace.net
 
 > ✨ Torrent downloads  
 > ✨ Placement after Jellyfin standards  
-> ✨ Matched to metadata shamelessly stolen from [SpykerNZ/one-pace-for-plex](https://github.com/SpykerNZ/one-pace-for-plex)
+> ✨ Metadata from [Barry’s One Pace set](https://github.com/tissla/opfor-metadata-barrys)
 
 ---
 
 # 📢 NEWS 
 
-## Current known issues (v1.0.1):
+## Opfor 1.2.0 release!
 
-### Videos getting sorted into strayfolder?
-There are some issues with concurrency due to workers simultaneously trying to create directories. 
-This is fixed for next release.
+New update finally!
+1. New metadata source repo (Barrys metadata)
+2. The 'sort'-command is here! 
+3. The 'download all' command is here for testing.
+4. Download progress bars being glitchy are fixed, and graphics updated.
 
-### Have-tag not working?
-The Have-tag does not work for bundles in this release. This is due to a misnamed variable. 
-This is fixed for next release.
+And more!
+Don't hesitate to post issues as you find them.
 
-## Future plans:
+## Sort existing downloads
 
-1. 'sort' command - To target a directory containing files, and renaming/sorting them into your metadata directory.
+```bash
+./opfor sort "/path/to/downloads"
+./opfor sort "/path/to/episode.mkv"
+```
 
-2. Cache for downloadKeys. This will prevent mismatches between 'list' and 'download'.
+Moves matched videos into their arc folders in the configured library, preserving filenames. Directories are searched recursively. Unmatched files and destination conflicts remain at their source paths. Known filename aliases receive matching NFO and thumbnail copies.
 
-3. Seeder-mode.
+Failed torrent placements remain under the library's `.opfor-tmp` directory and can be retried with `sort`. `clear` deletes temporary downloads, including those unplaced files.
 
 ## 📸 Examples
 
@@ -68,7 +72,7 @@ You can choose to either use one of the released versions or build from source y
 
 For this program to work, you need to have 'git' installed.
 
-### [Releases](https://github.com/tissla/opforjellyfin/releases/tag/v1.0.0)
+### [Releases](https://github.com/tissla/opforjellyfin/releases/tag/v1.2.0)
 
 MacOS / Linux:
 
@@ -111,12 +115,23 @@ A terminal that supports unicode-characters is heavily recommended for best expe
    ./opfor setDir "/media/One Piece/One Pace"
    ```
 
+   Episode thumbnails are disabled by default. Posters and backdrops are always downloaded.
+
+   ```bash
+   ./opfor setDir "/media/One Piece/One Pace" --thumbnails
+   ./opfor setDir "/media/One Piece/One Pace" --thumbnails=false 
+   ```
+
+   The choice is saved and reused by `sync`. Omitting the flag keeps the saved choice. Disabling thumbnails skips `*-thumb.png` and `*-thumb.jpg` during Git fetching; existing local images are kept.
+
+
 1. Find all available episodes with 'list', or use the -t flag to specify a title, or -r flag to specify a chapter-range.
 
    ```bash
    ./opfor list
    ./opfor list -t Wano
    ./opfor list -r 15-20
+   ./opfor list -n        # newest uploads first
    ```
 
 1. Download a torrent by using the downloadkey, displayed in front of the title. You can download one or multiple at the same time.
@@ -125,9 +140,22 @@ A terminal that supports unicode-characters is heavily recommended for best expe
    ./opfor download 15 16 17
    ```
 
+1. Download all missing episodes automatically, with up to five torrents running at once.
+
+   ```bash
+   ./opfor download all
+   ./opfor download all --include-extended --include-specials
+   ```
+
+   `all` fetches a fresh torrent list and prefers **1080p or higher** for each missing episode matched by Barry's index, falling back to **720p** when no matching source at 1080p or higher has seeders. Within each quality tier, the source with the most seeders wins. Resolution is checked per video filename, including inside batches; lower or unknown resolutions are skipped. Existing episodes are skipped, including inside arc batches. Extended versions and specials are optional; each flag can be used separately. Only missing, allowed video files are selected from batches. `--seed` cannot be combined with `all` because seeding would block the queue.
+
+   A total progress bar shows completed and remaining episodes for the selected downloads. An episode counts as complete after successful placement; failed downloads or placements remain in the remaining count. Elapsed time is shown during downloading, followed by a short file count and duration summary. Placement errors are still printed; successful placements are recorded with `--debug` instead of listed at the end.
+
+   Downloads time out after 30 minutes without progress. Larger batches can keep downloading for longer as long as they make progress. `info` counts all indexed versions and resolutions, so its totals can exceed what `download all` selects.
+
 ## 📦 Metadata
 
-I hope to continually update [metadata here!](https://github.com/tissla/one-pace-jellyfin)
+Metadata and the generated `metadata-index.json` are downloaded from [opfor-metadata-barrys](https://github.com/tissla/opfor-metadata-barrys). Run `sync` before using the new placement flow. The program reads the index directly; it does not build metadata locally.
 
 The 'sync' command allows the user to stay up to date with new additions to the metadata-repo.
 
@@ -143,11 +171,11 @@ The 'sync' command allows the user to stay up to date with new additions to the 
 
 ## 🤝 Contributions
 
-All pull requests are welcome. All criticisms are welcome. I'm here to build and to learn and to get better.
+All is welcome!
 
 ## ❤️ Acknowledgements
 
-- SpykerNZ for his metadata
+- Barry for their One Pace metadata set
 - Anacrolix awesome torrent lib
 - Charm team for cool stuff that I should use more
 - One Pace team for their amazing work!

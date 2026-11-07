@@ -4,14 +4,13 @@ import "time"
 
 // TODO: cleanup unused properties
 
-// config file
 type Config struct {
 	TargetDir  string        `json:"target_dir"`
 	GitHubRepo string        `json:"github_base_url"`
 	Source     ScraperConfig `json:"source"`
+	Thumbnails bool          `json:"thumbnails"`
 }
 
-// scrape config
 type ScraperConfig struct {
 	Name               string           `json:"name"`
 	BaseURL            string           `json:"base_url"`
@@ -28,77 +27,63 @@ type ScraperFields struct {
 	TorrentLink string `json:"torrent_link"`
 	TorrentID   string `json:"torrent_id"`
 	UploadDate  string `json:"upload_date"`
-	FileSize 		string `json:"file_size"`
+	FileSize    string `json:"file_size"`
 }
 
 type ValidationConfig struct {
 	RequiredInTitle string `json:"required_in_title"`
 }
 
-// Index maps seasons
 type MetadataIndex struct {
-	Seasons map[string]SeasonIndex `json:"seasons"`
+	ByFilename map[string]string       `json:"by_filename"`
+	Entries    map[string]MetadataFile `json:"entries"`
+	Arcs       map[string]MetadataArc  `json:"arcs"`
 }
 
-type SortedMetadataIndex struct {
-	Seasons []SeasonEntry `json:"seasons"`
+type MetadataFile struct {
+	NFOPath   string `json:"nfo_path"`
+	EpisodeID string `json:"episode_id"`
+	Kind      string `json:"kind"`
+	Variant   string `json:"variant"`
 }
 
-// used for sorting MetadataIndex.Seasons
-// Title is equivalent to the key in the map
-// SeasonIndex is the associated value
-type SeasonEntry struct {
-	Title       string      `json:"title"`
-	SeasonIndex SeasonIndex `json:"index"`
+type MetadataArc struct {
+	Folder       string `json:"folder"`
+	Name         string `json:"name"`
+	SeasonNumber int    `json:"season_number"`
 }
 
-// seasons maps episodes
-type SeasonIndex struct {
-	Range        string                 `json:"range"`
-	Name         string                 `json:"name"`
-	EpisodeRange map[string][]EpisodeData `json:"episodes"`
-}
-
-// episodes maps titles and have
-type EpisodeData struct {
-	Title string `json:"title"`
-}
-
-type FilePlacement struct {
-	Title             string   // title for display
-	FullTitle         string   // full file title
-	ChapterRange      string   // Main
-	PlacementFull     []string // used to display placed messages after all placements are done
-	PlacementProgress string   // used for placement messages after once placement is started
-	Placed            bool     // set to true when files are placed
-}
-
-// download struct
+// TorrentDownload download struct
 type TorrentDownload struct {
-	FilePlacement
-	Entry 		TorrentEntry  // fields from TorrentEntry for easy access during placement
-	TorrentID int       		// torrentID for tempdir
-	Started   time.Time 		// time torrent started (unused?)
-	Progress  int64     		// used by ui progressbar
-	TotalSize int64     		// used by ui progress bar
-	Done      bool      		// set to true when torrent is downloaded
+	Title             string   // title for display
+	FullTitle         string   // full torrent title
+	TorrentID         int      // torrentID for tempdir
+	ChapterRange      string   // Main
+	Progress          int64    // used by ui progressbar
+	TotalSize         int64    // used by ui progress bar
+	PlacementFull     []string // used to display placed messages after all placements are done
+	PlacementProgress string   //used for placement messages after download is done
+	Done              bool     // set to true when torrent is downloaded
+	Placed            bool     // set to true when files are placed, before clearing active downloads
+	VideoPaths        []string // actual files listed by the torrent
 }
 
-// entry for dl
+// TorrentEntry entry for dl
 type TorrentEntry struct {
-	Title         string // full title
-	Quality       string // parsed quality
-	DownloadKey   int    // download key set by rawIndex
-	TorrentName   string // for display
-	Seeders       int    // number of seeders
-	RawIndex      int    // RawIndex is based on ChapterRange, used for placement
-	TorrentLink   string // torrent link
-	TorrentID     int    // torrent ID, extracted from link
-	ChapterRange  string // torrent chapter range
-	MetaDataAvail bool   // metadata matching chapter range exists
-	IsSpecial     bool   // is a special (no chapter range)
-	HaveIt        int    // video with same chapter range exists
-	Date          time.Time // the upload date of the torrent, used for sorting and display
-	FileSize			string // file size as displayed on the torrent site
-	IsExtended    bool   // extended version
+	Title         string    // full title
+	Quality       string    // parsed quality
+	DownloadKey   int       // download key set by rawIndex
+	TorrentName   string    // for display
+	Seeders       int       // number of seeders
+	RawIndex      int       // sort order in search results
+	TorrentLink   string    // torrent link
+	TorrentID     int       // torrent ID, extracted from link
+	ChapterRange  string    // torrent chapter range
+	MetaDataAvail bool      // metadata exists for the episode or arc title
+	IsSpecial     bool      // is a special (no chapter range)
+	HaveIt        int       // 0 = none, 1 = some, 2 = all
+	Date          time.Time // upload date, zero if unknown
+	FileSize      string    // file size as displayed on the tracker
+
+	SelectedFiles []string `json:"-"` // nil selects all .mkv and .mp4 files
 }

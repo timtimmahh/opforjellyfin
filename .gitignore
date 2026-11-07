@@ -11,4 +11,8 @@ build.sh
 config.json
 testDir
 unused.old
+issues
+.search_cache.json
+search_cache.json
 
+opmount/

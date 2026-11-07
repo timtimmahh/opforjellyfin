@@ -1,9 +1,11 @@
-// scraper/scraper.go
+// Package scraper
 package scraper
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"opforjellyfin/internal/logger"
 	"opforjellyfin/internal/metadata"
 	"opforjellyfin/internal/shared"
 	"regexp"
@@ -17,8 +19,12 @@ import (
 
 // TODO: sort file, add more structs, add scrape-map
 
-// gets the torrents using current config, throws error if no valid config found
-func FetchTorrents(cfg shared.Config) ([]shared.TorrentEntry, error) {
+// requestTimeout bounds each per-page search request, so a slow or hanging
+// tracker doesn't stall FetchTorrents' unbounded pagination loop forever.
+const requestTimeout = 15 * time.Second
+
+// FetchTorrents gets the torrents using current config, throws error if no valid config found
+func FetchTorrents(cfg *shared.Config) ([]shared.TorrentEntry, error) {
 	//prep
 
 	// use scraper config from main config
@@ -37,14 +43,22 @@ func FetchTorrents(cfg shared.Config) ([]shared.TorrentEntry, error) {
 	for {
 		searchURL := fmt.Sprintf(baseURL+srcConfig.SearchPathTemplate, srcConfig.SearchQuery, page)
 
-		entries, done, err := fetchPage(searchURL, &srcConfig, baseURL)
+		doc, err := fetchDoc(searchURL)
 		if err != nil {
 			return nil, err
 		}
-		rawEntries = append(rawEntries, entries...)
-		if done {
-			break
+
+		rows := doc.Find(srcConfig.RowSelector)
+		if rows.Length() == 0 {
+			break // finito
 		}
+
+		rows.Each(func(i int, s *goquery.Selection) {
+			entry, ok := parseRow(s, &srcConfig, baseURL)
+			if ok {
+				rawEntries = append(rawEntries, entry)
+			}
+		})
 
 		page++
 	}
@@ -53,38 +67,30 @@ func FetchTorrents(cfg shared.Config) ([]shared.TorrentEntry, error) {
 	return processEntries(rawEntries), nil
 }
 
-// fetchPage retrieves and parses a single search results page.
-// Returns the parsed entries, whether there are no more pages, and any error.
-func fetchPage(searchURL string, config *shared.ScraperConfig, baseURL string) ([]shared.TorrentEntry, bool, error) {
-	resp, err := http.Get(searchURL)
+// fetchDoc fetches a single search-results page with a bounded timeout and
+// parses it into a goquery document. The response body is closed before
+// returning rather than deferred up to the caller's loop, so it doesn't stay
+// open across every remaining page of pagination.
+func fetchDoc(url string) (*goquery.Document, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false, err
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, false, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, false, err
-	}
-
-	rows := doc.Find(config.RowSelector)
-	if rows.Length() == 0 {
-		return nil, true, nil
-	}
-
-	var entries []shared.TorrentEntry
-	rows.Each(func(i int, s *goquery.Selection) {
-		entry, ok := parseRow(s, config, baseURL)
-		if ok {
-			entries = append(entries, entry)
-		}
-	})
-
-	return entries, false, nil
+	return goquery.NewDocumentFromReader(resp.Body)
 }
 
 // parseRow extracts torrent data from a table row using the scraper config
@@ -93,21 +99,8 @@ func parseRow(s *goquery.Selection, config *shared.ScraperConfig, baseURL string
 	title := s.Find(config.Fields.Title).Text()
 	seedersStr := s.Find(config.Fields.Seeders).Text()
 	torrentLink, _ := s.Find(config.Fields.TorrentLink).Attr("href")
-	dateNode := s.Find(config.Fields.UploadDate)
-	fileSizeStr := s.Find(config.Fields.FileSize).Text()
-	dateStr, attrExists := dateNode.Attr("data-timestamp")
-	var date time.Time
-	var err error
-	if attrExists {
-		dateTimestamp, _ := strconv.Atoi(dateStr)
-		date = time.Unix(int64(dateTimestamp), 0)
-	} else {
-		dateStr = dateNode.Text()
-		date, err = time.Parse("2006-01-02 15:04", dateStr)
-		if err != nil {
-			date = time.Time{} // zero value if parsing fails
-		}
-	}
+	date := parseUploadDate(s.Find(config.Fields.UploadDate))
+	fileSize := strings.TrimSpace(s.Find(config.Fields.FileSize).Text())
 
 	// Validate based on config
 	if config.Validation.RequiredInTitle != "" {
@@ -142,11 +135,9 @@ func parseRow(s *goquery.Selection, config *shared.ScraperConfig, baseURL string
 		torrentLink = baseURL + torrentLink
 	}
 
-	metaDataAvail := metadata.HaveMetadata(chapterRange)
+	metaDataAvail := metadata.HaveMetadata(title)
 
-	videoStatus := metadata.HaveVideoStatus(chapterRange)
-
-	isExtended := isExtended(title)
+	videoStatus := metadata.HaveVideoStatus(title)
 
 	return shared.TorrentEntry{
 		Title:         title,
@@ -161,9 +152,23 @@ func parseRow(s *goquery.Selection, config *shared.ScraperConfig, baseURL string
 		MetaDataAvail: metaDataAvail,
 		HaveIt:        videoStatus,
 		Date:          date,
-		FileSize:			 fileSizeStr,
-		IsExtended:    isExtended,
+		FileSize:      fileSize,
 	}, true
+}
+
+// parseUploadDate reads a row's upload date from its data-timestamp attribute,
+// falling back to the displayed UTC text. Returns the zero time if neither parses.
+func parseUploadDate(s *goquery.Selection) time.Time {
+	if raw, ok := s.Attr("data-timestamp"); ok {
+		if ts, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {
+			return time.Unix(ts, 0)
+		}
+	}
+	date, err := time.Parse("2006-01-02 15:04", strings.TrimSpace(s.Text()))
+	if err != nil {
+		return time.Time{}
+	}
+	return date.Local()
 }
 
 // processEntries sorts entries, filters out dead torrents and assigns unique download keys.
@@ -171,6 +176,7 @@ func processEntries(rawEntries []shared.TorrentEntry) []shared.TorrentEntry {
 	// filter out torrents with 0 seeders
 	filtered := make([]shared.TorrentEntry, 0, len(rawEntries))
 	for _, entry := range rawEntries {
+		// 0 seeders = ignore
 		if entry.Seeders > 0 {
 			filtered = append(filtered, entry)
 		}
@@ -198,13 +204,12 @@ func processEntries(rawEntries []shared.TorrentEntry) []shared.TorrentEntry {
 		}
 	}
 
+	// save to cache
+	err := SaveSearchCache(filtered)
+	if err != nil {
+		logger.Log(false, "Failed to cache")
+	}
 	return filtered
-}
-
-func isExtended(title string) bool {
-	title = strings.ToLower(title)
-
-	return strings.Contains(title, "extended")
 }
 
 // parseQuality returns video quality based on title string

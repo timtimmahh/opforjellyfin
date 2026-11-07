@@ -42,7 +42,10 @@ func ExtractChapterRangeFromTitle(title string) string {
 func ParseRange(r string) (int, int) {
 	// if no dash exists, it should be a range of a single number
 	if !strings.Contains(r, "-") {
-		a, _ := strconv.Atoi(r)
+		a, err := strconv.Atoi(r)
+		if err != nil {
+			return -1, -1
+		}
 		return a, a
 	}
 	parts := strings.Split(r, "-")

@@ -6,25 +6,52 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 )
 
 var (
-	activeDownloads = make(map[int]*TorrentDownload)
+	activeDownloads = make(map[int]TorrentDownload)
 	mu              sync.RWMutex
+	totalVideos     int
+	placedVideos    int
 )
+
+func SetDownloadTotal(total int) {
+	mu.Lock()
+	defer mu.Unlock()
+	totalVideos, placedVideos = total, 0
+}
+
+func RecordPlacedVideo() {
+	mu.Lock()
+	defer mu.Unlock()
+	if placedVideos < totalVideos {
+		placedVideos++
+	}
+}
+
+func GetDownloadProgress() (placed, total int) {
+	mu.RLock()
+	defer mu.RUnlock()
+	return placedVideos, totalVideos
+}
 
 func SaveTorrentDownload(td *TorrentDownload) {
 	mu.Lock()
 	defer mu.Unlock()
-	existing, ok := activeDownloads[td.TorrentID]
-	if ok {
-		*existing = *td // overwrite
-	} else {
-		activeDownloads[td.TorrentID] = td
-	}
+	snapshot := *td
+	snapshot.PlacementFull = slices.Clone(td.PlacementFull)
+	snapshot.VideoPaths = slices.Clone(td.VideoPaths)
+	activeDownloads[td.TorrentID] = snapshot
+}
+
+func RemoveActiveDownload(id int) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(activeDownloads, id)
 }
 
 func GetActiveDownloads() []*TorrentDownload {
@@ -33,33 +60,40 @@ func GetActiveDownloads() []*TorrentDownload {
 
 	var list []*TorrentDownload
 	for _, td := range activeDownloads {
-		list = append(list, td)
+		snapshot := td
+		snapshot.PlacementFull = slices.Clone(td.PlacementFull)
+		snapshot.VideoPaths = slices.Clone(td.VideoPaths)
+		list = append(list, &snapshot)
 	}
 
-	//make sure they come in the right order
+	// Sort by ChapterRange, then by TorrentID as a deterministic tiebreak.
 	sort.SliceStable(list, func(i, j int) bool {
-		return list[i].ChapterRange < list[j].ChapterRange
+		if list[i].ChapterRange != list[j].ChapterRange {
+			return list[i].ChapterRange < list[j].ChapterRange
+		}
+		return list[i].TorrentID < list[j].TorrentID
 	})
 
 	return list
 }
 
-// clear cache and remove temp download directories
+// Clear in-memory download state; unfinished files remain available for retry.
 func ClearActiveDownloads() {
 	mu.Lock()
 	defer mu.Unlock()
-	activeDownloads = make(map[int]*TorrentDownload)
-	CleanupTempDirs()
+	activeDownloads = make(map[int]TorrentDownload)
+	totalVideos, placedVideos = 0, 0
 }
 
 func CleanupTempDirs() error {
-	files, err := os.ReadDir(os.TempDir())
+	tmpDir, _ := GetTempDir()
+	files, err := os.ReadDir(tmpDir)
 	if err != nil {
 		return err
 	}
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), "opfor-tmp-") {
-			path := filepath.Join(os.TempDir(), f.Name())
+			path := filepath.Join(tmpDir, f.Name())
 			if err := os.RemoveAll(path); err != nil {
 				fmt.Printf("⚠️  Failed to remove %s: %v\n", path, err)
 			}
@@ -69,18 +103,8 @@ func CleanupTempDirs() error {
 }
 
 // helper
-func (fp *FilePlacement) MarkPlaced(msg string) {
-	fp.PlacementProgress = msg
-	fp.Placed = true
-	var intf interface{} = *fp
-	switch v := intf.(type) {
-	case TorrentDownload:
-		SaveTorrentDownload(&v)
-	}
+func (td *TorrentDownload) MarkPlaced(msg string) {
+	td.PlacementProgress = msg
+	td.Placed = true
+	SaveTorrentDownload(td)
 }
-
-//func (td *TorrentDownload) MarkPlaced(msg string) {
-//	td.PlacementProgress = msg
-//	td.Placed = true
-//	SaveTorrentDownload(td)
-//}

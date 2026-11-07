@@ -11,44 +11,37 @@ import (
 
 var (
 	metadataCache     *shared.MetadataIndex
+	metadataCacheErr  error
 	metadataCacheOnce sync.Once
 )
 
-// we read metadata-index.json once when we need it, and if multiple checks are needed we read the cache.
-// returns a reference to the index-variable
-func LoadMetadataCache() *shared.MetadataIndex {
+// LoadMetadataCache reads the generated index once per command.
+func LoadMetadataCache() (*shared.MetadataIndex, error) {
 	metadataCacheOnce.Do(func() {
-		cfg := shared.LoadConfig()
-		data, err := os.ReadFile(filepath.Join(cfg.TargetDir, "metadata-index.json"))
+		cfg, err := shared.LoadConfig()
 		if err != nil {
-			metadataCache = &shared.MetadataIndex{}
+			metadataCacheErr = err
 			return
 		}
-		json.Unmarshal(data, &metadataCache)
+		metadataCache, metadataCacheErr = readIndex(cfg.TargetDir)
 	})
-
-	return metadataCache
+	return metadataCache, metadataCacheErr
 }
 
-// saves file and creates cache
-func saveMetadataIndex(index *shared.MetadataIndex, baseDir string) error {
-	path := filepath.Join(baseDir, "metadata-index.json")
-	f, err := os.Create(path)
+func readIndex(baseDir string) (*shared.MetadataIndex, error) {
+	if baseDir == "" {
+		return nil, fmt.Errorf("set a library directory with 'opfor setDir <path>' first")
+	}
+	data, err := os.ReadFile(filepath.Join(baseDir, "metadata-index.json"))
 	if err != nil {
-		return fmt.Errorf("could not create index file: %w", err)
+		return nil, fmt.Errorf("read metadata index (run 'opfor sync'): %w", err)
 	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(index); err != nil {
-		return fmt.Errorf("could not encode metadata index: %w", err)
+	var index shared.MetadataIndex
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, fmt.Errorf("read metadata index: %w", err)
 	}
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("could not flush metadata index to disk: %w", err)
+	if len(index.ByFilename) == 0 || len(index.Entries) == 0 {
+		return nil, fmt.Errorf("metadata index has no filename mappings; run 'opfor sync'")
 	}
-
-	metadataCache = index // cache immediately after saving
-
-	return nil
+	return &index, nil
 }
