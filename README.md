@@ -133,6 +133,7 @@ A terminal that supports unicode-characters is heavily recommended for best expe
    ./opfor list -r 15-20
    ./opfor list -n        # newest uploads first
    ./opfor list -u        # only what you still need: new episodes and re-releases of ones you have
+   ./opfor list -u -e     # same, hiding standard cuts of episodes you have an extended version of
    ```
 
 1. Download a torrent by using the downloadkey, displayed in front of the title. You can download one or multiple at the same time.
@@ -148,9 +149,20 @@ A terminal that supports unicode-characters is heavily recommended for best expe
    ./opfor download all --include-extended --include-specials
    ./opfor download all --rereleases              # also replace episodes you only have an older release of
    ./opfor download all --rereleases --keep-old   # same, but keep the older files
+   ./opfor download all --prefer-extended         # extended versions instead of standard cuts, where one exists
+   ./opfor download all --prefer-extended --rereleases   # also swap standard cuts you have for their extended version
    ```
 
    `all` fetches a fresh torrent list and picks the **latest release** of each missing episode, falling back to an older release only when no torrent has the latest one. Among those it prefers **1080p or higher**, falling back to **720p** when no matching source at 1080p or higher has seeders. Within each quality tier, the source with the most seeders wins. Resolution is checked per video filename, including inside batches; lower or unknown resolutions are skipped. Existing episodes are skipped, including inside arc batches. Extended versions and specials are optional; each flag can be used separately. Only missing, allowed video files are selected from batches. `--seed` cannot be combined with `all` because seeding would block the queue. With `--rereleases`, the older file of an episode (and its copied `.nfo` and thumbnail) is deleted once the latest release has been placed in the same arc folder; `--keep-old` disables this. Re-cuts and extended versions count as different episodes and are never removed.
+
+   `--prefer-extended` takes the extended version of an episode instead of its standard cut, falling back to the standard cut when no torrent has the extended version. Having either version (in any release) counts as having the episode, so a standard cut you already have is only swapped for its extended version with `--rereleases`. In that case the standard cut, every release of it and its copied `.nfo` and thumbnail are deleted once the extended version is placed in the same arc folder; `--keep-old` disables this. Alternate versions are never removed. Jellyfin numbers both cuts as the same episode, so keeping only one avoids duplicate entries. `--prefer-extended` cannot be combined with `--include-extended`, which downloads both.
+
+   To clean up a library that already has both cuts of some episodes, run `scripts/remove_standard_cuts.py` (Python 3.9+, no dependencies). It lists the standard cuts that have an extended version in the same arc folder; add `--apply` to delete them, along with their copied `.nfo`, thumbnail and subtitle files. It uses the library from opfor's config unless you pass a directory.
+
+   ```bash
+   python3 scripts/remove_standard_cuts.py           # dry run
+   python3 scripts/remove_standard_cuts.py --apply
+   ```
 
    A total progress bar shows completed and remaining episodes for the selected downloads. An episode counts as complete after successful placement; failed downloads or placements remain in the remaining count. Elapsed time is shown during downloading, followed by a short file count and duration summary. Placement errors are still printed; successful placements are recorded with `--debug` instead of listed at the end.
 

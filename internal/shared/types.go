@@ -75,6 +75,7 @@ type TorrentDownload struct {
 	Placed            bool     // set to true when files are placed, before clearing active downloads
 	VideoPaths        []string // actual files listed by the torrent
 	RemoveSuperseded  bool     // delete older releases of each placed video
+	RemoveStandardCut bool     // delete the standard cut of each placed extended video
 }
 
 // TorrentEntry entry for dl
@@ -94,6 +95,7 @@ type TorrentEntry struct {
 	Date          time.Time // upload date, zero if unknown
 	FileSize      string    // file size as displayed on the tracker
 
-	SelectedFiles    []string `json:"-"` // nil selects all .mkv and .mp4 files
-	RemoveSuperseded bool     `json:"-"` // delete older releases once placed
+	SelectedFiles     []string `json:"-"` // nil selects all .mkv and .mp4 files
+	RemoveSuperseded  bool     `json:"-"` // delete older releases once placed
+	RemoveStandardCut bool     `json:"-"` // delete standard cuts once an extended version is placed
 }

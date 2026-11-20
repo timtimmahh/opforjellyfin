@@ -28,6 +28,7 @@ var (
 	verboseList  bool
 	sortNewest   bool
 	onlyUpdates  bool
+	preferExt    bool
 
 	alternate bool
 )
@@ -35,6 +36,12 @@ var (
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all available One Pace seasons and specials",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if preferExt && !onlyUpdates {
+			return fmt.Errorf("the --prefer-extended flag requires --updates")
+		}
+		return nil
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		spinner := ui.NewMultirowSpinner(ui.Animations["Searcher"], 4)
 
@@ -96,10 +103,14 @@ func filterUpdates(cfg *shared.Config, entries []shared.TorrentEntry) ([]shared.
 	if err != nil {
 		return nil, nil, fmt.Errorf("read library: %w", err)
 	}
+	var skip map[string]bool
+	if preferExt {
+		skip = metadata.CoveredByExtended(index, owned)
+	}
 	kept := make([]shared.TorrentEntry, 0, len(entries))
 	updates := make(map[int]metadata.Update)
 	for _, t := range entries {
-		if update := metadata.ReleaseUpdate(t, index, owned); update != metadata.UpdateNone {
+		if update := metadata.ReleaseUpdate(t, index, owned, skip); update != metadata.UpdateNone {
 			kept = append(kept, t)
 			updates[t.TorrentID] = update
 		}
@@ -263,5 +274,6 @@ func init() {
 	listCmd.Flags().BoolVarP(&verboseList, "verbose", "v", false, "Show full titles")
 	listCmd.Flags().BoolVarP(&sortNewest, "newest", "n", false, "Sort by torrent upload date, newest first")
 	listCmd.Flags().BoolVarP(&onlyUpdates, "updates", "u", false, "Show only latest releases you don't have: new episodes and re-releases of ones you have")
+	listCmd.Flags().BoolVarP(&preferExt, "prefer-extended", "e", false, "With --updates, hide standard cuts of episodes you have an extended version of")
 	rootCmd.AddCommand(listCmd)
 }

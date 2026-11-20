@@ -68,15 +68,49 @@ func TestReleaseUpdate(t *testing.T) {
 		{"Arc [1080p]", afterAll.AddDate(0, 0, -2), UpdateNone}, // batch predates A v2
 		{"Arc [1080p]", time.Time{}, UpdateNone},
 	} {
-		if got := ReleaseUpdate(shared.TorrentEntry{Title: tc.title, Date: tc.date}, index, owned); got != tc.want {
+		if got := ReleaseUpdate(shared.TorrentEntry{Title: tc.title, Date: tc.date}, index, owned, nil); got != tc.want {
 			t.Errorf("%s (%v): got %v, want %v", tc.title, tc.date, got, tc.want)
 		}
 	}
 }
 
 func TestReleaseUpdateNewWhenNothingOwned(t *testing.T) {
-	got := ReleaseUpdate(shared.TorrentEntry{Title: "A v2 [1080p][22222222].mkv"}, updatesIndex(), nil)
+	got := ReleaseUpdate(shared.TorrentEntry{Title: "A v2 [1080p][22222222].mkv"}, updatesIndex(), nil, nil)
 	if got != UpdateNew {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestReleaseUpdateSkipsStandardCutsCoveredByExtended(t *testing.T) {
+	index := &shared.MetadataIndex{
+		Arcs: map[string]shared.MetadataArc{"arc": {Folder: "Arc"}},
+		ByFilename: map[string]string{
+			"X": "x", "X ext": "xe", "X alt": "xa", "Y": "y", "Y ext": "ye",
+		},
+		Entries: map[string]shared.MetadataFile{
+			"x":  {NFOPath: "Arc/X.nfo", EpisodeID: "x", Kind: "episode", Variant: "standard"},
+			"xe": {NFOPath: "Arc/X ext.nfo", EpisodeID: "x", Kind: "episode", Variant: "extended"},
+			"xa": {NFOPath: "Arc/X alt.nfo", EpisodeID: "x", Kind: "episode", Variant: "alternate-g-8"},
+			"y":  {NFOPath: "Arc/Y.nfo", EpisodeID: "y", Kind: "episode", Variant: "standard"},
+			"ye": {NFOPath: "Arc/Y ext.nfo", EpisodeID: "y", Kind: "episode", Variant: "extended"},
+		},
+	}
+	owned := map[string][]string{"xe": {"X ext"}, "y": {"Y"}}
+	covered := CoveredByExtended(index, owned)
+	if len(covered) != 1 || !covered["x"] {
+		t.Fatalf("covered = %v", covered)
+	}
+	for title, want := range map[string]Update{
+		"X.mkv":     UpdateNone, // covered by the owned extended version
+		"X alt.mkv": UpdateNew,  // alternate versions are not covered
+		"Y ext.mkv": UpdateNew,  // the extended version of an owned standard cut
+		"Arc":       UpdateNew,  // the batch still has X alt and Y ext
+	} {
+		if got := ReleaseUpdate(shared.TorrentEntry{Title: title}, index, owned, covered); got != want {
+			t.Errorf("%s: got %v, want %v", title, got, want)
+		}
+	}
+	if got := ReleaseUpdate(shared.TorrentEntry{Title: "X.mkv"}, index, owned, nil); got != UpdateNew {
+		t.Errorf("without skip: got %v", got)
 	}
 }

@@ -95,40 +95,61 @@ func MatchAndPlaceVideo(videoPath, targetDir string, index *shared.MetadataIndex
 	return fmt.Sprintf("%s: %s", action, relative), nil
 }
 
-// RemoveSuperseded deletes older releases of the episode a just-placed video
-// belongs to, once that video is a latest release. Only videos in the same arc
-// folder that map to the same index entry are removed, with the NFO and
-// thumbnail copies made for them; the entry's own metadata files are kept.
-// It returns the removed videos relative to targetDir.
-func RemoveSuperseded(placedName, targetDir string, index *shared.MetadataIndex) ([]string, error) {
+// Removed is a video RemoveSuperseded deleted, relative to the target directory.
+type Removed struct {
+	Path     string
+	Standard bool // a standard cut replaced by an extended version, not an older release
+}
+
+// RemoveSuperseded deletes videos a just-placed video replaces, from the same
+// arc folder: older releases of its index entry once it is a latest release,
+// and, with standardCut and an extended video, every release of the standard
+// cut of the same episode. Alternate versions and other episodes are kept. The
+// NFO and thumbnail copies made for removed videos go with them; each entry's
+// own metadata files are kept.
+func RemoveSuperseded(placedName, targetDir string, index *shared.MetadataIndex, standardCut bool) ([]Removed, error) {
 	stem := shared.VideoStem(placedName)
 	id, ok := index.ByFilename[stem]
-	if !ok || !index.IsLatestRelease(stem) {
+	if !ok {
 		return nil, nil
 	}
-	nfoPath := index.Entries[id].NFOPath
-	dir := filepath.Join(targetDir, filepath.FromSlash(path.Dir(nfoPath)))
-	canonical := strings.TrimSuffix(path.Base(nfoPath), ".nfo")
+	placed := index.Entries[id]
+	latest := index.IsLatestRelease(stem)
+	standardCut = standardCut && placed.Variant == "extended"
+	if !latest && !standardCut {
+		return nil, nil
+	}
+	dir := filepath.Join(targetDir, filepath.FromSlash(path.Dir(placed.NFOPath)))
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	if !slices.ContainsFunc(files, func(f os.DirEntry) bool { return shared.VideoStem(f.Name()) == stem && shared.IsVideoFile(f.Name()) }) {
-		return nil, nil // the latest release is not actually in place
+		return nil, nil // the placed video is not actually in place
 	}
-	var removed []string
+	var removed []Removed
 	for _, file := range files {
 		old := shared.VideoStem(file.Name())
-		if !file.Type().IsRegular() || !shared.IsVideoFile(file.Name()) || old == stem ||
-			index.ByFilename[old] != id || index.IsLatestRelease(old) {
+		if !file.Type().IsRegular() || !shared.IsVideoFile(file.Name()) || old == stem {
+			continue
+		}
+		oldID, known := index.ByFilename[old]
+		if !known {
+			continue
+		}
+		entry := index.Entries[oldID]
+		superseded := latest && oldID == id && !index.IsLatestRelease(old)
+		standard := standardCut && entry.EpisodeID == placed.EpisodeID && entry.Kind == placed.Kind &&
+			(entry.Variant == "standard" || entry.Variant == "")
+		if !superseded && !standard {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, file.Name())); err != nil {
 			return removed, err
 		}
 		relative, _ := filepath.Rel(targetDir, filepath.Join(dir, file.Name()))
-		removed = append(removed, relative)
-		if old == canonical {
+		removed = append(removed, Removed{Path: relative, Standard: standard})
+		if old == strings.TrimSuffix(path.Base(entry.NFOPath), ".nfo") {
 			continue
 		}
 		for _, suffix := range []string{".nfo", "-thumb.png"} {

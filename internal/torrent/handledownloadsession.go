@@ -68,11 +68,12 @@ func HandleDownloadSession(entries []shared.TorrentEntry, outDir string, seed, a
 		}
 
 		td := &shared.TorrentDownload{
-			Title:            displayTitle,
-			TorrentID:        entry.TorrentID,
-			FullTitle:        entry.Title,
-			ChapterRange:     entry.ChapterRange,
-			RemoveSuperseded: entry.RemoveSuperseded,
+			Title:             displayTitle,
+			TorrentID:         entry.TorrentID,
+			FullTitle:         entry.Title,
+			ChapterRange:      entry.ChapterRange,
+			RemoveSuperseded:  entry.RemoveSuperseded,
+			RemoveStandardCut: entry.RemoveStandardCut,
 		}
 
 		allTDs = append(allTDs, td)

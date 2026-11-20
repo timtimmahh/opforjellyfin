@@ -102,13 +102,70 @@ func TestProcessTorrentFilesKeepsOldReleasesWhenDisabled(t *testing.T) {
 func TestRemoveSupersededIgnoresOlderReleases(t *testing.T) {
 	_, target, index := supersedeFixture(t)
 	// Placing an archived release never removes anything.
-	removed, err := RemoveSuperseded("A mid.mkv", target, index)
+	removed, err := RemoveSuperseded("A mid.mkv", target, index, true)
 	if err != nil || removed != nil {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
 	// A latest release that is not actually in the folder removes nothing either.
-	removed, err = RemoveSuperseded("A new.mkv", target, index)
+	removed, err = RemoveSuperseded("A new.mkv", target, index, true)
 	if err != nil || removed != nil {
+		t.Fatalf("removed=%v err=%v", removed, err)
+	}
+}
+
+func TestProcessTorrentFilesReplacesStandardCut(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "library")
+	arc := filepath.Join(target, "Arc")
+	if err := os.MkdirAll(arc, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"X.nfo", "X.mkv", // standard cut with its canonical metadata
+		"X old.mkv", "X old.nfo", "X old-thumb.png", // older standard release with copied sidecars
+		"X ext.nfo",              // extended metadata
+		"X alt.nfo", "X alt.mkv", // alternate version: must stay
+		"Y.nfo", "Y.mkv", // other episode: must stay
+	} {
+		if err := os.WriteFile(filepath.Join(arc, name), []byte(name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := &shared.MetadataIndex{
+		ByFilename: map[string]string{"X": "x", "X old": "x", "X ext": "xe", "X alt": "xa", "Y": "y"},
+		Entries: map[string]shared.MetadataFile{
+			"x":  {NFOPath: "Arc/X.nfo", EpisodeID: "x", Kind: "episode", Variant: "standard"},
+			"xe": {NFOPath: "Arc/X ext.nfo", EpisodeID: "x", Kind: "episode", Variant: "extended"},
+			"xa": {NFOPath: "Arc/X alt.nfo", EpisodeID: "x", Kind: "episode", Variant: "alternate-g-8"},
+			"y":  {NFOPath: "Arc/Y.nfo", EpisodeID: "y", Kind: "episode", Variant: "standard"},
+		},
+	}
+	video := filepath.Join(root, "X ext.mkv")
+	if err := os.WriteFile(video, []byte("ext"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	td := &shared.TorrentDownload{TorrentID: 9003, VideoPaths: []string{video}, RemoveStandardCut: true}
+	if err := ProcessTorrentFiles(target, td, index); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"X alt.mkv", "X alt.nfo", "X ext.mkv", "X ext.nfo", "X.nfo", "Y.mkv", "Y.nfo"}
+	if got := arcFiles(t, target); !reflect.DeepEqual(got, want) {
+		t.Fatalf("library = %v\nwant      %v", got, want)
+	}
+	removed := 0
+	for _, line := range td.PlacementFull {
+		if line == "Removed standard cut: Arc/X.mkv" || line == "Removed standard cut: Arc/X old.mkv" {
+			removed++
+		}
+	}
+	if removed != 2 {
+		t.Fatalf("placement messages %v", td.PlacementFull)
+	}
+	// Placing a standard cut never removes an extended version.
+	if err := os.WriteFile(filepath.Join(arc, "X.mkv"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := RemoveSuperseded("X.mkv", target, index, true); err != nil || removed != nil {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
 }

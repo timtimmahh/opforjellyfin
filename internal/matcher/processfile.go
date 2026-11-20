@@ -58,13 +58,17 @@ func ProcessTorrentFiles(outDir string, td *shared.TorrentDownload, index *share
 		if message != "" {
 			td.PlacementFull = append(td.PlacementFull, message)
 		}
-		if err == nil && td.RemoveSuperseded {
-			removed, err := RemoveSuperseded(filepath.Base(videoPath), outDir, index)
+		if err == nil && (td.RemoveSuperseded || td.RemoveStandardCut) {
+			removed, err := RemoveSuperseded(filepath.Base(videoPath), outDir, index, td.RemoveStandardCut)
 			for _, old := range removed {
-				td.PlacementFull = append(td.PlacementFull, "Removed older release: "+old)
+				if old.Standard {
+					td.PlacementFull = append(td.PlacementFull, "Removed standard cut: "+old.Path)
+				} else {
+					td.PlacementFull = append(td.PlacementFull, "Removed older release: "+old.Path)
+				}
 			}
 			if err != nil {
-				td.PlacementFull = append(td.PlacementFull, fmt.Sprintf("Could not remove older release: %v", err))
+				td.PlacementFull = append(td.PlacementFull, fmt.Sprintf("Could not remove replaced video: %v", err))
 			}
 		}
 		shared.SaveTorrentDownload(td)

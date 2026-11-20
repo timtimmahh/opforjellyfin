@@ -54,29 +54,37 @@ func bestRanks(index *shared.MetadataIndex) map[string]int {
 
 // SelectOptions widens what 'download all' selects beyond missing standard episodes.
 type SelectOptions struct {
-	Extended   bool // extended versions
-	Specials   bool // specials
-	Rereleases bool // latest releases of episodes owned only as an older release
-	KeepOld    bool // with Rereleases, keep the older files instead of removing them
+	Extended       bool // extended versions, alongside the standard cut
+	PreferExtended bool // extended versions instead of the standard cut, where one exists
+	Specials       bool // specials
+	Rereleases     bool // latest releases of episodes owned only as an older release; with PreferExtended, also extended versions of owned standard cuts
+	KeepOld        bool // with Rereleases, keep the older files instead of removing them
 }
 
 // SelectAllDownloads picks one file per missing episode: the latest release when
 // a torrent has it, preferring 1080p or higher over 720p, then the most seeders.
 // With Rereleases, episodes owned only as older releases are included, and for
-// those only a latest release is accepted.
+// those only a latest release is accepted. With PreferExtended, an episode that
+// has an extended version gets that instead of its standard cut, falling back to
+// the standard cut when no torrent has the extended version; owning either
+// version of an extended episode counts as owning the episode.
 func SelectAllDownloads(ctx context.Context, entries []shared.TorrentEntry, cfg *shared.Config, index *shared.MetadataIndex, opts SelectOptions) ([]shared.TorrentEntry, error) {
 	if index == nil || len(index.Entries) == 0 {
 		return nil, fmt.Errorf("metadata index is missing; run 'opfor sync'")
 	}
 	wanted := make(map[string]bool)
+	hasExtended := make(map[string]bool) // standard keys with a wanted extended version
 	for _, entry := range index.Entries {
 		if entry.EpisodeID == "" || (entry.Kind != "episode" && entry.Kind != "special") {
 			return nil, fmt.Errorf("metadata index lacks episode information; run 'opfor sync'")
 		}
-		if entry.Kind == "special" && !opts.Specials || entry.Variant == "extended" && !opts.Extended {
+		if entry.Kind == "special" && !opts.Specials || entry.Variant == "extended" && !opts.Extended && !opts.PreferExtended {
 			continue
 		}
 		wanted[episodeKey(entry)] = true
+		if entry.Variant == "extended" && opts.PreferExtended {
+			hasExtended[entry.EpisodeID] = true
+		}
 	}
 	owned, err := metadata.OwnedReleases(cfg.TargetDir, index)
 	if err != nil {
@@ -88,6 +96,8 @@ func SelectAllDownloads(ctx context.Context, entries []shared.TorrentEntry, cfg 
 		key := episodeKey(index.Entries[id])
 		ownsLatest[key] = ownsLatest[key] || slices.ContainsFunc(stems, index.IsLatestRelease)
 	}
+	best := bestRanks(index)
+	found := make(map[string]int) // best rank found so far per episode
 	rerelease := make(map[string]bool)
 	for key, latest := range ownsLatest {
 		if opts.Rereleases && !latest && wanted[key] {
@@ -95,6 +105,29 @@ func SelectAllDownloads(ctx context.Context, entries []shared.TorrentEntry, cfg 
 		} else {
 			delete(wanted, key)
 		}
+	}
+	for standard := range hasExtended {
+		extended := standard + ":extended"
+		_, ownsExtended := ownsLatest[extended]
+		_, ownsStandard := ownsLatest[standard]
+		switch {
+		case ownsExtended:
+			delete(wanted, standard) // any extended release covers the standard cut
+		case ownsStandard && !opts.Rereleases:
+			delete(wanted, extended) // replacing an owned standard cut needs --rereleases
+		}
+	}
+	done := func(key string) bool {
+		rank, ok := found[key]
+		return ok && rank >= best[key]
+	}
+	complete := func() bool {
+		for key := range wanted {
+			if !done(key) && !(hasExtended[key] && done(key+":extended")) {
+				return false
+			}
+		}
+		return true
 	}
 
 	entries = append([]shared.TorrentEntry(nil), entries...)
@@ -105,16 +138,13 @@ func SelectAllDownloads(ctx context.Context, entries []shared.TorrentEntry, cfg 
 		return entries[i].TorrentID < entries[j].TorrentID
 	})
 	seen := make(map[int]bool)
-	best := bestRanks(index)
-	found := make(map[string]int) // best rank found so far per episode
-	satisfied := 0
 	var candidates []shared.TorrentEntry
 	var fetchError error
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if satisfied == len(wanted) {
+		if complete() {
 			break
 		}
 		if entry.Seeders <= 0 || entry.TorrentID <= 0 || seen[entry.TorrentID] {
@@ -155,11 +185,7 @@ func SelectAllDownloads(ctx context.Context, entries []shared.TorrentEntry, cfg 
 			}
 			entry.SelectedFiles = append(entry.SelectedFiles, filename)
 			rank := fileRank(index, stem, resolution)
-			previous, seenBefore := found[key]
-			if !seenBefore || rank > previous {
-				if (!seenBefore || previous < best[key]) && rank >= best[key] {
-					satisfied++
-				}
+			if previous, seenBefore := found[key]; !seenBefore || rank > previous {
 				found[key] = rank
 			}
 		}
@@ -178,11 +204,15 @@ func SelectAllDownloads(ctx context.Context, entries []shared.TorrentEntry, cfg 
 			if !wanted[key] || fileRank(index, stem, videoResolution(filename)) < found[key] {
 				continue
 			}
+			if _, extendedFound := found[key+":extended"]; hasExtended[key] && extendedFound {
+				continue // the extended version replaces this standard cut
+			}
 			entry.SelectedFiles = append(entry.SelectedFiles, filename)
 			delete(wanted, key)
 		}
 		if len(entry.SelectedFiles) > 0 {
 			entry.RemoveSuperseded = opts.Rereleases && !opts.KeepOld
+			entry.RemoveStandardCut = opts.PreferExtended && opts.Rereleases && !opts.KeepOld
 			selected = append(selected, entry)
 		}
 	}

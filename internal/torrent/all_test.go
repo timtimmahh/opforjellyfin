@@ -317,3 +317,82 @@ func TestSelectAllDownloadsRereleases(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectAllDownloadsPreferExtended(t *testing.T) {
+	rel := func(name, status string) shared.MetadataRelease {
+		return shared.MetadataRelease{Filename: name, Status: status}
+	}
+	entry := func(episode, variant string, releases ...shared.MetadataRelease) shared.MetadataFile {
+		return shared.MetadataFile{NFOPath: "Arc/" + releases[0].Filename + ".nfo", EpisodeID: episode, Kind: "episode", Variant: variant, Releases: releases}
+	}
+	index := &shared.MetadataIndex{
+		Arcs: map[string]shared.MetadataArc{"arc": {Folder: "Arc"}},
+		ByFilename: map[string]string{
+			"P [1080p]": "p", "P ext [1080p]": "pe",
+			"Q [1080p]": "q", "Q ext [1080p]": "qe",
+			"R [1080p]": "r", "R ext [1080p]": "re",
+			"S [1080p]": "s", "S ext [1080p]": "se", "S ext old [1080p]": "se",
+			"T [1080p]": "t",
+		},
+		Entries: map[string]shared.MetadataFile{
+			"p": entry("p", "standard", rel("P [1080p]", "current")), "pe": entry("p", "extended", rel("P ext [1080p]", "current")),
+			"q": entry("q", "standard", rel("Q [1080p]", "current")), "qe": entry("q", "extended", rel("Q ext [1080p]", "current")),
+			"r": entry("r", "standard", rel("R [1080p]", "current")), "re": entry("r", "extended", rel("R ext [1080p]", "current")),
+			"s":  entry("s", "standard", rel("S [1080p]", "current")),
+			"se": entry("s", "extended", rel("S ext [1080p]", "current"), rel("S ext old [1080p]", "archived")),
+			"t":  entry("t", "standard", rel("T [1080p]", "current")),
+		},
+	}
+	installManifests(t, map[int]metainfo.Info{
+		1: {Name: "Batch", Files: []metainfo.FileInfo{
+			{Path: []string{"P [1080p].mkv"}, Length: 10},
+			{Path: []string{"P ext [1080p].mkv"}, Length: 10},
+			{Path: []string{"Q [1080p].mkv"}, Length: 10}, // Q's extended version is in no torrent
+			{Path: []string{"R [1080p].mkv"}, Length: 10},
+			{Path: []string{"R ext [1080p].mkv"}, Length: 10},
+			{Path: []string{"S [1080p].mkv"}, Length: 10},
+			{Path: []string{"S ext [1080p].mkv"}, Length: 10},
+			{Path: []string{"T [1080p].mkv"}, Length: 10},
+		}},
+	})
+	// Owned: R's standard cut and an older release of S's extended version.
+	cfg := &shared.Config{TargetDir: t.TempDir(), Source: shared.ScraperConfig{BaseURL: "https://tracker.test"}}
+	if err := os.Mkdir(filepath.Join(cfg.TargetDir, "Arc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"R [1080p]", "S ext old [1080p]"} {
+		if err := os.WriteFile(filepath.Join(cfg.TargetDir, "Arc", name+".mkv"), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		opts         SelectOptions
+		want         []string
+		removeStdCut bool
+	}{
+		{"standard only", SelectOptions{}, []string{"P [1080p]", "Q [1080p]", "S [1080p]", "T [1080p]"}, false},
+		{"prefer extended", SelectOptions{PreferExtended: true}, []string{"P ext [1080p]", "Q [1080p]", "T [1080p]"}, false},
+		{"prefer extended with rereleases", SelectOptions{PreferExtended: true, Rereleases: true},
+			[]string{"P ext [1080p]", "Q [1080p]", "R ext [1080p]", "S ext [1080p]", "T [1080p]"}, true},
+		{"keep old", SelectOptions{PreferExtended: true, Rereleases: true, KeepOld: true},
+			[]string{"P ext [1080p]", "Q [1080p]", "R ext [1080p]", "S ext [1080p]", "T [1080p]"}, false},
+	} {
+		selected, err := SelectAllDownloads(context.Background(), []shared.TorrentEntry{{TorrentID: 1, Seeders: 10}}, cfg, index, tc.opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, s := range selected {
+			if s.RemoveStandardCut != tc.removeStdCut {
+				t.Errorf("%s: RemoveStandardCut=%v", tc.name, s.RemoveStandardCut)
+			}
+			for _, file := range s.SelectedFiles {
+				got = append(got, shared.VideoStem(file))
+			}
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: selected %v; want %v", tc.name, got, tc.want)
+		}
+	}
+}

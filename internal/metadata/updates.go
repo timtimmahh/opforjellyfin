@@ -57,10 +57,11 @@ func OwnedReleases(targetDir string, index *shared.MetadataIndex) (map[string][]
 // re-release when every video of it is an older release. An arc batch qualifies
 // when one of its episodes does and it was uploaded after the arc's newest
 // release, since its file list is not known without fetching the torrent.
-func ReleaseUpdate(t shared.TorrentEntry, index *shared.MetadataIndex, owned map[string][]string) Update {
+// Entries in skip are treated as not needed.
+func ReleaseUpdate(t shared.TorrentEntry, index *shared.MetadataIndex, owned map[string][]string, skip map[string]bool) Update {
 	stem := shared.VideoStem(t.Title)
 	if id, ok := index.ByFilename[stem]; ok {
-		if !index.IsLatestRelease(stem) {
+		if skip[id] || !index.IsLatestRelease(stem) {
 			return UpdateNone
 		}
 		return entryUpdate(id, index, owned)
@@ -71,7 +72,7 @@ func ReleaseUpdate(t shared.TorrentEntry, index *shared.MetadataIndex, owned map
 		}
 		result := UpdateNone
 		for id, entry := range index.Entries {
-			if path.Dir(entry.NFOPath) != arc.Folder {
+			if path.Dir(entry.NFOPath) != arc.Folder || skip[id] {
 				continue
 			}
 			if released, ok := entry.LatestReleaseTime(); ok && (t.Date.IsZero() || t.Date.Before(released)) {
@@ -98,4 +99,22 @@ func entryUpdate(id string, index *shared.MetadataIndex, owned map[string][]stri
 		}
 	}
 	return UpdateRereleased
+}
+
+// CoveredByExtended returns the standard cut entry IDs whose episode is owned
+// as an extended version, in any release.
+func CoveredByExtended(index *shared.MetadataIndex, owned map[string][]string) map[string]bool {
+	extended := make(map[string]bool) // episode IDs owned as an extended version
+	for id := range owned {
+		if entry := index.Entries[id]; entry.Variant == "extended" {
+			extended[entry.Kind+"\x00"+entry.EpisodeID] = true
+		}
+	}
+	covered := make(map[string]bool)
+	for id, entry := range index.Entries {
+		if (entry.Variant == "standard" || entry.Variant == "") && extended[entry.Kind+"\x00"+entry.EpisodeID] {
+			covered[id] = true
+		}
+	}
+	return covered
 }

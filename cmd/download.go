@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var seed, includeExtended, includeSpecials, includeRereleases, keepOld bool
+var seed, includeExtended, preferExtended, includeSpecials, includeRereleases, keepOld bool
 
 var downloadCmd = &cobra.Command{
 	Use:   "download <all | downloadKey [downloadKey...]>",
@@ -28,15 +28,20 @@ var downloadCmd = &cobra.Command{
 				return fmt.Errorf("'all' cannot be combined with download keys")
 			}
 			if seed {
-				return fmt.Errorf("--seed cannot be used with 'all': seeding would prevent the queue from advancing")
+				return fmt.Errorf("the --seed flag cannot be used with 'all': seeding would prevent the queue from advancing")
+			}
+			if includeExtended && preferExtended {
+				return fmt.Errorf("use either --include-extended or --prefer-extended, not both")
 			}
 			if keepOld && !includeRereleases {
-				return fmt.Errorf("--keep-old requires --rereleases")
+				return fmt.Errorf("the --keep-old flag requires --rereleases")
 			}
 			return nil
 		}
-		if cmd.Flags().Changed("include-extended") || cmd.Flags().Changed("include-specials") || cmd.Flags().Changed("rereleases") || cmd.Flags().Changed("keep-old") {
-			return fmt.Errorf("--include-extended, --include-specials, --rereleases and --keep-old require 'download all'")
+		for _, name := range []string{"include-extended", "prefer-extended", "include-specials", "rereleases", "keep-old"} {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("the --%s flag requires 'download all'", name)
+			}
 		}
 		for _, arg := range args {
 			if _, err := strconv.Atoi(arg); err != nil {
@@ -70,7 +75,7 @@ var downloadCmd = &cobra.Command{
 				return err
 			}
 			matches, err = torrent.SelectAllDownloads(cmd.Context(), entries, cfg, index, torrent.SelectOptions{
-				Extended: includeExtended, Specials: includeSpecials, Rereleases: includeRereleases, KeepOld: keepOld,
+				Extended: includeExtended, PreferExtended: preferExtended, Specials: includeSpecials, Rereleases: includeRereleases, KeepOld: keepOld,
 			})
 			if err != nil {
 				return err
@@ -83,6 +88,9 @@ var downloadCmd = &cobra.Command{
 			what := "missing"
 			if includeRereleases {
 				what = "missing or re-released"
+			}
+			if preferExtended {
+				what += " (extended preferred)"
 			}
 			logger.Log(true, "Selected %d %s files from %d torrents (latest releases first, 1080p+ preferred, 720p fallback; up to %d downloads at once).", files, what, len(matches), torrent.MaxConcurrent)
 		} else {
@@ -126,6 +134,7 @@ var downloadCmd = &cobra.Command{
 func init() {
 	downloadCmd.Flags().BoolVar(&seed, "seed", false, "Keep seeding downloaded torrents until you stop the program (Ctrl+C)")
 	downloadCmd.Flags().BoolVar(&includeExtended, "include-extended", false, "Also download extended versions with 'download all'")
+	downloadCmd.Flags().BoolVar(&preferExtended, "prefer-extended", false, "With 'download all', download extended versions instead of standard cuts where one exists; with --rereleases, also replace standard cuts you have")
 	downloadCmd.Flags().BoolVar(&includeRereleases, "rereleases", false, "Also download the latest release of episodes you only have an older release of, with 'download all'; the older files are removed once it is placed")
 	downloadCmd.Flags().BoolVar(&keepOld, "keep-old", false, "With --rereleases, keep the older files instead of removing them")
 	downloadCmd.Flags().BoolVar(&includeSpecials, "include-specials", false, "Also download specials with 'download all'")
