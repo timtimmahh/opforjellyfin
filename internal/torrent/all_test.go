@@ -72,7 +72,7 @@ func TestSelectAllDownloads(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(cfg.TargetDir, "Arc", tc.owned+".mkv"), []byte("owned"), 0644); err != nil {
 				t.Fatal(err)
 			}
-			selected, err := SelectAllDownloads(context.Background(), entries, cfg, &index, tc.extended, tc.specials)
+			selected, err := SelectAllDownloads(context.Background(), entries, cfg, &index, SelectOptions{Extended: tc.extended, Specials: tc.specials})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -100,7 +100,7 @@ func TestSelectAllDownloadsAlreadyOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 	installManifests(t, nil) // No manifest needs fetching when everything is owned.
-	selected, err := SelectAllDownloads(context.Background(), []shared.TorrentEntry{{TorrentID: 1, Seeders: 10}}, cfg, &index, false, false)
+	selected, err := SelectAllDownloads(context.Background(), []shared.TorrentEntry{{TorrentID: 1, Seeders: 10}}, cfg, &index, SelectOptions{})
 	if err != nil || len(selected) != 0 {
 		t.Fatalf("selected %v, error %v", selected, err)
 	}
@@ -143,7 +143,7 @@ func TestSelectAllDownloadsPrefersHDWith720pFallback(t *testing.T) {
 		{TorrentID: 6, Seeders: 0, Quality: "1080p"},
 	}
 	cfg := &shared.Config{TargetDir: t.TempDir(), Source: shared.ScraperConfig{BaseURL: "https://tracker.test"}}
-	selected, err := SelectAllDownloads(context.Background(), entries, cfg, index, false, false)
+	selected, err := SelectAllDownloads(context.Background(), entries, cfg, index, SelectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,4 +188,132 @@ func installManifests(t *testing.T, manifests map[int]metainfo.Info) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(&body), Header: make(http.Header)}, nil
 	})}
+}
+
+func TestSelectAllDownloadsPrefersLatestRelease(t *testing.T) {
+	rel := func(name, status string) shared.MetadataRelease {
+		return shared.MetadataRelease{Filename: name, Status: status}
+	}
+	index := &shared.MetadataIndex{
+		Arcs: map[string]shared.MetadataArc{"arc": {Folder: "Arc"}},
+		ByFilename: map[string]string{
+			"A new [720p]": "a", "A old [1080p]": "a",
+			"B new [1080p]": "b", "B new [720p]": "b", "B old [1080p]": "b",
+			"C new [1080p]": "c", "C old [1080p]": "c",
+		},
+		Entries: map[string]shared.MetadataFile{
+			"a": {NFOPath: "Arc/A old [1080p].nfo", EpisodeID: "a", Kind: "episode", Variant: "standard",
+				Releases: []shared.MetadataRelease{rel("A new [720p]", "current"), rel("A old [1080p]", "archived")}},
+			"b": {NFOPath: "Arc/B old [1080p].nfo", EpisodeID: "b", Kind: "episode", Variant: "standard",
+				Releases: []shared.MetadataRelease{rel("B new [1080p]", "current"), rel("B new [720p]", "current"), rel("B old [1080p]", "unknown")}},
+			"c": {NFOPath: "Arc/C old [1080p].nfo", EpisodeID: "c", Kind: "episode", Variant: "standard",
+				Releases: []shared.MetadataRelease{rel("C new [1080p]", "current"), rel("C old [1080p]", "archived")}},
+		},
+	}
+	installManifests(t, map[int]metainfo.Info{
+		1: {Name: "Old batch", Files: []metainfo.FileInfo{
+			{Path: []string{"A old [1080p].mkv"}, Length: 10},
+			{Path: []string{"B old [1080p].mkv"}, Length: 10},
+			{Path: []string{"C old [1080p].mkv"}, Length: 10},
+		}},
+		2: {Name: "A new [720p].mkv", Length: 10},
+		3: {Name: "B new [720p].mkv", Length: 10},
+		4: {Name: "B new [1080p].mkv", Length: 10},
+	})
+	entries := []shared.TorrentEntry{
+		{TorrentID: 1, Seeders: 500}, {TorrentID: 2, Seeders: 5},
+		{TorrentID: 3, Seeders: 50}, {TorrentID: 4, Seeders: 2},
+	}
+	cfg := &shared.Config{TargetDir: t.TempDir(), Source: shared.ScraperConfig{BaseURL: "https://tracker.test"}}
+	selected, err := SelectAllDownloads(context.Background(), entries, cfg, index, SelectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[int][]string)
+	for _, entry := range selected {
+		got[entry.TorrentID] = entry.SelectedFiles
+	}
+	want := map[int][]string{
+		1: {"Old batch/C old [1080p].mkv"}, // C's current release is in no torrent
+		2: {"A new [720p].mkv"},            // latest beats an older 1080p
+		4: {"B new [1080p].mkv"},           // among latest, 1080p beats 720p
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected %v; want %v", got, want)
+	}
+}
+
+func TestSelectAllDownloadsRereleases(t *testing.T) {
+	rel := func(name, status string) shared.MetadataRelease {
+		return shared.MetadataRelease{Filename: name, Status: status}
+	}
+	entry := func(id string, releases ...shared.MetadataRelease) shared.MetadataFile {
+		return shared.MetadataFile{NFOPath: "Arc/" + releases[len(releases)-1].Filename + ".nfo", EpisodeID: id, Kind: "episode", Variant: "standard", Releases: releases}
+	}
+	index := &shared.MetadataIndex{
+		Arcs: map[string]shared.MetadataArc{"arc": {Folder: "Arc"}},
+		ByFilename: map[string]string{
+			"A new [1080p]": "a", "A old [1080p]": "a",
+			"B new [1080p]": "b", "B old [1080p]": "b",
+			"C new [1080p]": "c", "C old [1080p]": "c",
+			"D [1080p]": "d", "E old [1080p]": "e",
+		},
+		Entries: map[string]shared.MetadataFile{
+			"a": entry("a", rel("A new [1080p]", "current"), rel("A old [1080p]", "archived")),
+			"b": entry("b", rel("B new [1080p]", "current"), rel("B old [1080p]", "archived")),
+			"c": entry("c", rel("C new [1080p]", "current"), rel("C old [1080p]", "archived")),
+			"d": entry("d", rel("D [1080p]", "current")),
+			"e": {NFOPath: "Arc/E old [1080p].nfo", EpisodeID: "e", Kind: "episode", Variant: "standard"}, // no release data
+		},
+	}
+	installManifests(t, map[int]metainfo.Info{
+		1: {Name: "Batch", Files: []metainfo.FileInfo{
+			{Path: []string{"A new [1080p].mkv"}, Length: 10},
+			{Path: []string{"B new [1080p].mkv"}, Length: 10},
+			{Path: []string{"C old [1080p].mkv"}, Length: 10},
+			{Path: []string{"D [1080p].mkv"}, Length: 10},
+			{Path: []string{"E old [1080p].mkv"}, Length: 10},
+		}},
+	})
+	// Owned: A and C only as old releases, B already at its latest, E without release data.
+	cfg := &shared.Config{TargetDir: t.TempDir(), Source: shared.ScraperConfig{BaseURL: "https://tracker.test"}}
+	if err := os.Mkdir(filepath.Join(cfg.TargetDir, "Arc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"A old [1080p]", "B new [1080p]", "C old [1080p]", "E old [1080p]"} {
+		if err := os.WriteFile(filepath.Join(cfg.TargetDir, "Arc", name+".mkv"), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		rereleases bool
+		want       []string
+	}{
+		{false, []string{"Batch/D [1080p].mkv"}},
+		// C's latest release is in no torrent, so its older one is not downloaded again.
+		{true, []string{"Batch/A new [1080p].mkv", "Batch/D [1080p].mkv"}},
+	} {
+		selected, err := SelectAllDownloads(context.Background(), []shared.TorrentEntry{{TorrentID: 1, Seeders: 10}}, cfg, index, SelectOptions{Rereleases: tc.rereleases})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range selected {
+			if s.RemoveSuperseded != tc.rereleases {
+				t.Errorf("rereleases=%v: RemoveSuperseded=%v", tc.rereleases, s.RemoveSuperseded)
+			}
+		}
+		if tc.rereleases {
+			kept, err := SelectAllDownloads(context.Background(), []shared.TorrentEntry{{TorrentID: 1, Seeders: 10}}, cfg, index, SelectOptions{Rereleases: true, KeepOld: true})
+			if err != nil || len(kept) == 0 || kept[0].RemoveSuperseded {
+				t.Errorf("KeepOld: selected %+v, err %v", kept, err)
+			}
+		}
+		var got []string
+		for _, s := range selected {
+			got = append(got, s.SelectedFiles...)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("rereleases=%v: selected %v; want %v", tc.rereleases, got, tc.want)
+		}
+	}
 }

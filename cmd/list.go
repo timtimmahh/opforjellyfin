@@ -10,6 +10,7 @@ import (
 
 	"opforjellyfin/internal/flags"
 	"opforjellyfin/internal/logger"
+	"opforjellyfin/internal/metadata"
 	"opforjellyfin/internal/scraper"
 	"opforjellyfin/internal/shared"
 	"opforjellyfin/internal/ui"
@@ -26,6 +27,7 @@ var (
 	onlySpecials bool
 	verboseList  bool
 	sortNewest   bool
+	onlyUpdates  bool
 
 	alternate bool
 )
@@ -59,6 +61,15 @@ var listCmd = &cobra.Command{
 			}
 		}
 
+		updates := map[int]metadata.Update{}
+		if onlyUpdates {
+			if filtered, updates, err = filterUpdates(cfg, filtered); err != nil {
+				spinner.Stop()
+				logger.Log(true, "❌ %v", err)
+				return
+			}
+		}
+
 		sortTorrents(filtered, sortNewest)
 
 		spinner.Stop()
@@ -66,12 +77,44 @@ var listCmd = &cobra.Command{
 		fmt.Println("📚 Filtered Download List:")
 		for _, t := range filtered {
 			if verboseList {
-				renderVerboseRow(t)
+				renderVerboseRow(t, updates[t.TorrentID])
 			} else {
-				renderRow(t)
+				renderRow(t, updates[t.TorrentID])
 			}
 		}
 	},
+}
+
+// filterUpdates keeps latest releases that are missing from the library or
+// replace an older release in it, returning why each was kept by torrent ID.
+func filterUpdates(cfg *shared.Config, entries []shared.TorrentEntry) ([]shared.TorrentEntry, map[int]metadata.Update, error) {
+	index, err := metadata.LoadMetadataCache()
+	if err != nil {
+		return nil, nil, err
+	}
+	owned, err := metadata.OwnedReleases(cfg.TargetDir, index)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read library: %w", err)
+	}
+	kept := make([]shared.TorrentEntry, 0, len(entries))
+	updates := make(map[int]metadata.Update)
+	for _, t := range entries {
+		if update := metadata.ReleaseUpdate(t, index, owned); update != metadata.UpdateNone {
+			kept = append(kept, t)
+			updates[t.TorrentID] = update
+		}
+	}
+	return kept, updates, nil
+}
+
+func updateTag(update metadata.Update) string {
+	switch update {
+	case metadata.UpdateNew:
+		return " | " + ui.StyleFactory("🆕 new", ui.Style.Green)
+	case metadata.UpdateRereleased:
+		return " | " + ui.StyleFactory("♻️  re-release", ui.Style.Pink)
+	}
+	return ""
 }
 
 // sortTorrents orders by upload date (newest first, unknown dates last) when
@@ -139,7 +182,7 @@ func applyFilters(t shared.TorrentEntry) bool {
 }
 
 // rowrender
-func renderRow(t shared.TorrentEntry) {
+func renderRow(t shared.TorrentEntry, update metadata.Update) {
 	// bools
 	metaMark := "❌"
 
@@ -174,11 +217,11 @@ func renderRow(t shared.TorrentEntry) {
 	// set flag
 	alternate = !alternate
 
-	fmt.Println(row)
+	fmt.Println(row + updateTag(update))
 }
 
 // render verbose row
-func renderVerboseRow(t shared.TorrentEntry) {
+func renderVerboseRow(t shared.TorrentEntry, update metadata.Update) {
 	metaMark := "❌"
 	if t.MetaDataAvail {
 		metaMark = "✅"
@@ -206,7 +249,7 @@ func renderVerboseRow(t shared.TorrentEntry) {
 	)
 
 	alternate = !alternate
-	fmt.Println(row)
+	fmt.Println(row + updateTag(update))
 }
 
 // init
@@ -219,5 +262,6 @@ func init() {
 	listCmd.Flags().BoolVarP(&onlySpecials, "specials", "s", false, "Show only specials")
 	listCmd.Flags().BoolVarP(&verboseList, "verbose", "v", false, "Show full titles")
 	listCmd.Flags().BoolVarP(&sortNewest, "newest", "n", false, "Sort by torrent upload date, newest first")
+	listCmd.Flags().BoolVarP(&onlyUpdates, "updates", "u", false, "Show only latest releases you don't have: new episodes and re-releases of ones you have")
 	rootCmd.AddCommand(listCmd)
 }

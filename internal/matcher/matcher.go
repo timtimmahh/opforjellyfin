@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -92,4 +93,49 @@ func MatchAndPlaceVideo(videoPath, targetDir string, index *shared.MetadataIndex
 	}
 	relative, _ := filepath.Rel(targetDir, destination)
 	return fmt.Sprintf("%s: %s", action, relative), nil
+}
+
+// RemoveSuperseded deletes older releases of the episode a just-placed video
+// belongs to, once that video is a latest release. Only videos in the same arc
+// folder that map to the same index entry are removed, with the NFO and
+// thumbnail copies made for them; the entry's own metadata files are kept.
+// It returns the removed videos relative to targetDir.
+func RemoveSuperseded(placedName, targetDir string, index *shared.MetadataIndex) ([]string, error) {
+	stem := shared.VideoStem(placedName)
+	id, ok := index.ByFilename[stem]
+	if !ok || !index.IsLatestRelease(stem) {
+		return nil, nil
+	}
+	nfoPath := index.Entries[id].NFOPath
+	dir := filepath.Join(targetDir, filepath.FromSlash(path.Dir(nfoPath)))
+	canonical := strings.TrimSuffix(path.Base(nfoPath), ".nfo")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.ContainsFunc(files, func(f os.DirEntry) bool { return shared.VideoStem(f.Name()) == stem && shared.IsVideoFile(f.Name()) }) {
+		return nil, nil // the latest release is not actually in place
+	}
+	var removed []string
+	for _, file := range files {
+		old := shared.VideoStem(file.Name())
+		if !file.Type().IsRegular() || !shared.IsVideoFile(file.Name()) || old == stem ||
+			index.ByFilename[old] != id || index.IsLatestRelease(old) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, file.Name())); err != nil {
+			return removed, err
+		}
+		relative, _ := filepath.Rel(targetDir, filepath.Join(dir, file.Name()))
+		removed = append(removed, relative)
+		if old == canonical {
+			continue
+		}
+		for _, suffix := range []string{".nfo", "-thumb.png"} {
+			if err := os.Remove(filepath.Join(dir, old+suffix)); err != nil && !os.IsNotExist(err) {
+				return removed, err
+			}
+		}
+	}
+	return removed, nil
 }

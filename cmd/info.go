@@ -40,7 +40,7 @@ var infoCmd = &cobra.Command{
 
 		if verboseInfo {
 			fmt.Printf("📡 Torrent Provider: %s\n", cfg.Source.BaseURL)
-			fmt.Printf("🐙 Metadata Source:  https://github.com/%s\n", cfg.GitHubRepo)
+			fmt.Printf("🐙 Metadata Source:  https://github.com/%s\n", cfg.MetadataRepo())
 		}
 
 		var seasonFolders []season

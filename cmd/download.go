@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var seed, includeExtended, includeSpecials bool
+var seed, includeExtended, includeSpecials, includeRereleases, keepOld bool
 
 var downloadCmd = &cobra.Command{
 	Use:   "download <all | downloadKey [downloadKey...]>",
@@ -30,10 +30,13 @@ var downloadCmd = &cobra.Command{
 			if seed {
 				return fmt.Errorf("--seed cannot be used with 'all': seeding would prevent the queue from advancing")
 			}
+			if keepOld && !includeRereleases {
+				return fmt.Errorf("--keep-old requires --rereleases")
+			}
 			return nil
 		}
-		if cmd.Flags().Changed("include-extended") || cmd.Flags().Changed("include-specials") {
-			return fmt.Errorf("--include-extended and --include-specials require 'download all'")
+		if cmd.Flags().Changed("include-extended") || cmd.Flags().Changed("include-specials") || cmd.Flags().Changed("rereleases") || cmd.Flags().Changed("keep-old") {
+			return fmt.Errorf("--include-extended, --include-specials, --rereleases and --keep-old require 'download all'")
 		}
 		for _, arg := range args {
 			if _, err := strconv.Atoi(arg); err != nil {
@@ -66,7 +69,9 @@ var downloadCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			matches, err = torrent.SelectAllDownloads(cmd.Context(), entries, cfg, index, includeExtended, includeSpecials)
+			matches, err = torrent.SelectAllDownloads(cmd.Context(), entries, cfg, index, torrent.SelectOptions{
+				Extended: includeExtended, Specials: includeSpecials, Rereleases: includeRereleases, KeepOld: keepOld,
+			})
 			if err != nil {
 				return err
 			}
@@ -75,7 +80,11 @@ var downloadCmd = &cobra.Command{
 			for _, match := range matches {
 				files += len(match.SelectedFiles)
 			}
-			logger.Log(true, "Selected %d missing files from %d torrents (1080p+ preferred, 720p fallback; up to %d downloads at once).", files, len(matches), torrent.MaxConcurrent)
+			what := "missing"
+			if includeRereleases {
+				what = "missing or re-released"
+			}
+			logger.Log(true, "Selected %d %s files from %d torrents (latest releases first, 1080p+ preferred, 720p fallback; up to %d downloads at once).", files, what, len(matches), torrent.MaxConcurrent)
 		} else {
 			searchCache, err := scraper.LoadSearchCache()
 			if err != nil {
@@ -117,6 +126,8 @@ var downloadCmd = &cobra.Command{
 func init() {
 	downloadCmd.Flags().BoolVar(&seed, "seed", false, "Keep seeding downloaded torrents until you stop the program (Ctrl+C)")
 	downloadCmd.Flags().BoolVar(&includeExtended, "include-extended", false, "Also download extended versions with 'download all'")
+	downloadCmd.Flags().BoolVar(&includeRereleases, "rereleases", false, "Also download the latest release of episodes you only have an older release of, with 'download all'; the older files are removed once it is placed")
+	downloadCmd.Flags().BoolVar(&keepOld, "keep-old", false, "With --rereleases, keep the older files instead of removing them")
 	downloadCmd.Flags().BoolVar(&includeSpecials, "include-specials", false, "Also download specials with 'download all'")
 	rootCmd.AddCommand(downloadCmd)
 }

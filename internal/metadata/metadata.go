@@ -39,7 +39,11 @@ func cloneAndCopyRepo(cfg *shared.Config, syncOnly bool) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	repo := fmt.Sprintf("https://github.com/%s.git", shared.MetadataRepo)
+	name := cfg.MetadataRepo()
+	if err := shared.ValidateMetadataRepo(name); err != nil {
+		return err
+	}
+	repo := fmt.Sprintf("https://github.com/%s.git", name)
 
 	fmt.Printf("%s", "🌐 Fetching metadata from "+repo+"\n")
 
@@ -96,8 +100,12 @@ func cloneMetadata(repo, dir string, thumbnails bool) error {
 		args = append(args, "--filter=blob:none", "--no-checkout")
 	}
 	args = append(args, repo, dir)
-	if output, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, strings.TrimSpace(string(output)))
+	clone := exec.Command("git", args...)
+	// GitHub answers a missing or private repo with an auth challenge; fail
+	// instead of leaving git waiting at a username prompt.
+	clone.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if output, err := clone.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone %s: %w: %s (check the repo name and that it is public)", repo, err, strings.TrimSpace(string(output)))
 	}
 	if thumbnails {
 		return nil

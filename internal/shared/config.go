@@ -3,13 +3,41 @@ package shared
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 )
 
-const MetadataRepo = "tissla/opfor-metadata-barrys"
+// DefaultMetadataRepo is used when the config names no metadata repo.
+const DefaultMetadataRepo = "tissla/opfor-metadata-barrys"
+
+// legacyMetadataRepo uses an index format this version cannot read.
+const legacyMetadataRepo = "tissla/one-pace-jellyfin"
+
+var githubRepoName = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
+
+// ValidateMetadataRepo checks a GitHub "owner/name" repo, which ends up in a git clone URL.
+func ValidateMetadataRepo(repo string) error {
+	name := repo[strings.Index(repo, "/")+1:]
+	if !githubRepoName.MatchString(repo) || name == "." || name == ".." {
+		return fmt.Errorf("invalid metadata repo %q: expected a GitHub repo as owner/name", repo)
+	}
+	return nil
+}
+
+// MetadataRepo returns the configured metadata repo, falling back to the default
+// for an empty value or the legacy repo saved by older versions.
+func (c *Config) MetadataRepo() string {
+	repo := strings.TrimSpace(c.GitHubRepo)
+	if repo == "" || strings.EqualFold(repo, legacyMetadataRepo) {
+		return DefaultMetadataRepo
+	}
+	return repo
+}
 
 var defaultSource = ScraperConfig{
 	Name: "nyaa", BaseURL: "https://nyaa.si",
@@ -21,7 +49,7 @@ var defaultSource = ScraperConfig{
 
 var defaultCfg = Config{
 	TargetDir:  "",
-	GitHubRepo: MetadataRepo,
+	GitHubRepo: DefaultMetadataRepo,
 	Source:     defaultSource,
 	Thumbnails: false,
 }
@@ -47,7 +75,7 @@ func LoadConfig() (*Config, error) {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			configLoadError = err
 		}
-		cfg.GitHubRepo = MetadataRepo
+		cfg.GitHubRepo = cfg.MetadataRepo()
 		cfg.Source = withSourceDefaults(cfg.Source)
 		globalConfig = &cfg
 	})

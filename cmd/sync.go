@@ -17,6 +17,13 @@ var syncCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if cmd.Flags().Changed("repo") {
+			if err := shared.ValidateMetadataRepo(syncRepo); err != nil {
+				return err
+			}
+			// Saved by the sync once the repo has been fetched successfully.
+			cfg.GitHubRepo = syncRepo
+		}
 		if cfg.TargetDir == "" {
 			return fmt.Errorf("no target directory set; use 'setDir' first")
 		}
@@ -24,6 +31,9 @@ var syncCmd = &cobra.Command{
 	},
 }
 
+var syncRepo string
+
 func init() {
+	syncCmd.Flags().StringVar(&syncRepo, "repo", "", "GitHub metadata repo as owner/name; saved after a successful sync (default "+shared.DefaultMetadataRepo+")")
 	rootCmd.AddCommand(syncCmd)
 }

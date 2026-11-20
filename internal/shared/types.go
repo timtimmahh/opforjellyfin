@@ -41,10 +41,18 @@ type MetadataIndex struct {
 }
 
 type MetadataFile struct {
-	NFOPath   string `json:"nfo_path"`
-	EpisodeID string `json:"episode_id"`
-	Kind      string `json:"kind"`
-	Variant   string `json:"variant"`
+	NFOPath   string            `json:"nfo_path"`
+	EpisodeID string            `json:"episode_id"`
+	Kind      string            `json:"kind"`
+	Variant   string            `json:"variant"`
+	Releases  []MetadataRelease `json:"releases"` // absent before index schema 3
+}
+
+// MetadataRelease is one filename of an entry and its status in one-pace-metadata.
+type MetadataRelease struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"`   // "current", "archived" or "unknown"
+	Released string `json:"released"` // release time in UTC, may be empty
 }
 
 type MetadataArc struct {
@@ -66,6 +74,7 @@ type TorrentDownload struct {
 	Done              bool     // set to true when torrent is downloaded
 	Placed            bool     // set to true when files are placed, before clearing active downloads
 	VideoPaths        []string // actual files listed by the torrent
+	RemoveSuperseded  bool     // delete older releases of each placed video
 }
 
 // TorrentEntry entry for dl
@@ -85,5 +94,6 @@ type TorrentEntry struct {
 	Date          time.Time // upload date, zero if unknown
 	FileSize      string    // file size as displayed on the tracker
 
-	SelectedFiles []string `json:"-"` // nil selects all .mkv and .mp4 files
+	SelectedFiles    []string `json:"-"` // nil selects all .mkv and .mp4 files
+	RemoveSuperseded bool     `json:"-"` // delete older releases once placed
 }

@@ -132,6 +132,7 @@ A terminal that supports unicode-characters is heavily recommended for best expe
    ./opfor list -t Wano
    ./opfor list -r 15-20
    ./opfor list -n        # newest uploads first
+   ./opfor list -u        # only what you still need: new episodes and re-releases of ones you have
    ```
 
 1. Download a torrent by using the downloadkey, displayed in front of the title. You can download one or multiple at the same time.
@@ -145,9 +146,11 @@ A terminal that supports unicode-characters is heavily recommended for best expe
    ```bash
    ./opfor download all
    ./opfor download all --include-extended --include-specials
+   ./opfor download all --rereleases              # also replace episodes you only have an older release of
+   ./opfor download all --rereleases --keep-old   # same, but keep the older files
    ```
 
-   `all` fetches a fresh torrent list and prefers **1080p or higher** for each missing episode matched by Barry's index, falling back to **720p** when no matching source at 1080p or higher has seeders. Within each quality tier, the source with the most seeders wins. Resolution is checked per video filename, including inside batches; lower or unknown resolutions are skipped. Existing episodes are skipped, including inside arc batches. Extended versions and specials are optional; each flag can be used separately. Only missing, allowed video files are selected from batches. `--seed` cannot be combined with `all` because seeding would block the queue.
+   `all` fetches a fresh torrent list and picks the **latest release** of each missing episode, falling back to an older release only when no torrent has the latest one. Among those it prefers **1080p or higher**, falling back to **720p** when no matching source at 1080p or higher has seeders. Within each quality tier, the source with the most seeders wins. Resolution is checked per video filename, including inside batches; lower or unknown resolutions are skipped. Existing episodes are skipped, including inside arc batches. Extended versions and specials are optional; each flag can be used separately. Only missing, allowed video files are selected from batches. `--seed` cannot be combined with `all` because seeding would block the queue. With `--rereleases`, the older file of an episode (and its copied `.nfo` and thumbnail) is deleted once the latest release has been placed in the same arc folder; `--keep-old` disables this. Re-cuts and extended versions count as different episodes and are never removed.
 
    A total progress bar shows completed and remaining episodes for the selected downloads. An episode counts as complete after successful placement; failed downloads or placements remain in the remaining count. Elapsed time is shown during downloading, followed by a short file count and duration summary. Placement errors are still printed; successful placements are recorded with `--debug` instead of listed at the end.
 
@@ -158,6 +161,8 @@ A terminal that supports unicode-characters is heavily recommended for best expe
 Metadata and the generated `metadata-index.json` are downloaded from [opfor-metadata-barrys](https://github.com/tissla/opfor-metadata-barrys). Run `sync` before using the new placement flow. The program reads the index directly; it does not build metadata locally.
 
 The 'sync' command allows the user to stay up to date with new additions to the metadata-repo.
+
+To use a different metadata repo, such as a fork, run `./opfor sync --repo owner/name`. It is saved to `github_base_url` in the config after a successful sync.
 
 ### Steps to make sure Jellyfin doesn't mess with the metadata
 

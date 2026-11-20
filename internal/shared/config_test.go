@@ -40,3 +40,28 @@ func TestParseRange(t *testing.T) {
 		}
 	}
 }
+
+func TestMetadataRepo(t *testing.T) {
+	for stored, want := range map[string]string{
+		"":                         DefaultMetadataRepo,
+		"tissla/one-pace-jellyfin": DefaultMetadataRepo, // legacy format
+		" me/my-metadata ":         "me/my-metadata",
+	} {
+		if got := (&Config{GitHubRepo: stored}).MetadataRepo(); got != want {
+			t.Errorf("MetadataRepo(%q) = %q, want %q", stored, got, want)
+		}
+	}
+}
+
+func TestValidateMetadataRepo(t *testing.T) {
+	for _, ok := range []string{"tissla/opfor-metadata-barrys", "me/my.repo_1"} {
+		if err := ValidateMetadataRepo(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "me", "me/", "/repo", "-me/repo", "me/repo/extra", "me/..", "https://github.com/me/repo", "me/repo --upload-pack=x", "me/re po"} {
+		if err := ValidateMetadataRepo(bad); err == nil {
+			t.Errorf("%q: expected an error", bad)
+		}
+	}
+}
