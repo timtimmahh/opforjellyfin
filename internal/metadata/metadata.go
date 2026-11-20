@@ -62,7 +62,7 @@ func cloneAndCopyRepo(cfg *shared.Config, syncOnly bool) error {
 	}
 
 	if syncOnly {
-		err = shared.SyncDir(srcDir, baseDir)
+		err = shared.SyncDir(srcDir, baseDir, index)
 	} else {
 		err = shared.CopyDir(srcDir, baseDir)
 	}

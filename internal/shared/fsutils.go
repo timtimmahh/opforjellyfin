@@ -6,6 +6,7 @@ import (
 	"io"
 	"opforjellyfin/internal/logger"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -153,8 +154,10 @@ func CopyDir(src, dst string) error {
 	return walkAndCopyInternal(src, dst, false)
 }
 
-// SyncDir copies new/changed files from src to dst
-func SyncDir(src, dst string) error {
+// SyncDir copies new/changed files from src to dst, then warns about NFOs in
+// dst that src no longer has. index is the metadata index from src; it is used
+// to recognize the NFO copies opfor makes for placed videos.
+func SyncDir(src, dst string, index *MetadataIndex) error {
 	dirMutex.Lock()
 	defer dirMutex.Unlock()
 
@@ -162,15 +165,28 @@ func SyncDir(src, dst string) error {
 		return err
 	}
 
-	warnStaleMetadataFiles(src, dst)
+	stale, err := staleMetadataFiles(src, dst, index)
+	if err != nil {
+		logger.Log(false, "staleMetadataFiles: walk failed: %v", err)
+	}
+	for _, relPath := range stale {
+		logger.Log(true, "⚠️  %s no longer exists in the metadata repo (kept locally - review manually)", relPath)
+	}
 	return nil
 }
 
-// warnStaleMetadataFiles reports .nfo files present locally under dst that no
-// longer exist in the upstream src tree (e.g. the metadata repo renamed or
-// removed an episode). It only reports - it never deletes anything, since dst
-// also holds user-downloaded video files that this must never touch.
-func warnStaleMetadataFiles(src, dst string) {
+// staleMetadataFiles returns the .nfo files under dst that do not exist in the
+// upstream src tree (e.g. the metadata repo renamed or removed an episode),
+// relative to dst. It never deletes anything, since dst also holds
+// user-downloaded video files that this must never touch.
+//
+// NFO copies made for placed videos are not stale: when a video's filename is
+// an alias of an episode (a newer release, say), placement copies the episode's
+// NFO to the video's name, and the repo only has the episode's own NFO. A copy
+// is recognized by a video with the same name beside it whose filename the
+// index maps to an episode in that folder.
+func staleMetadataFiles(src, dst string, index *MetadataIndex) ([]string, error) {
+	var stale []string
 	err := filepath.Walk(dst, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -196,16 +212,39 @@ func warnStaleMetadataFiles(src, dst string) {
 			return nil
 		}
 
-		if !FileExists(filepath.Join(src, relPath)) {
-			logger.Log(true, "⚠️  %s no longer exists in the metadata repo (kept locally - review manually)", relPath)
+		if !FileExists(filepath.Join(src, relPath)) && !isPlacedNFOCopy(dst, relPath, index) {
+			stale = append(stale, relPath)
 		}
 
 		return nil
 	})
+	return stale, err
+}
 
-	if err != nil {
-		logger.Log(false, "warnStaleMetadataFiles: walk failed: %v", err)
+// isPlacedNFOCopy reports whether the NFO at relPath under dst belongs to a
+// video beside it that the index maps to an episode in the same folder.
+func isPlacedNFOCopy(dst, relPath string, index *MetadataIndex) bool {
+	if index == nil {
+		return false
 	}
+	stem := strings.TrimSuffix(filepath.Base(relPath), filepath.Ext(relPath))
+	id, ok := index.ByFilename[stem]
+	if !ok {
+		return false
+	}
+	if path.Dir(index.Entries[id].NFOPath) != filepath.ToSlash(filepath.Dir(relPath)) {
+		return false
+	}
+	files, err := os.ReadDir(filepath.Join(dst, filepath.Dir(relPath)))
+	if err != nil {
+		return false
+	}
+	for _, file := range files {
+		if file.Type().IsRegular() && IsVideoFile(file.Name()) && VideoStem(file.Name()) == stem {
+			return true
+		}
+	}
+	return false
 }
 
 // walkAndCopyInternal is the internal non-locked version
